@@ -58,12 +58,14 @@ const STORAGE_HI = 'wanan.maze.hi';
 const NAMES = { player: '蔣萬安', boss: '沈伯洋', wang: '王義川', jian: '簡舒培', he: '何孟樺', xu: '許淑華' };
 const BUBBLE_TEXT = '來辯論阿';
 const LINES = {
-  wang: ['來辯論阿！', '糟糕！要來辯論了'],
-  jian: ['糟糕！要質詢了', '請市長答詢！'],
-  he:   ['糟糕！要質詢了', '市長別跑！'],
-  xu:   ['來辯論阿！', '糟糕！要質詢了'],
-  boss: ['糟糕！要來辯論了', '來辯論阿！'],
+  wang: ['來辯論阿！', '我要質詢！', '市長請上台！'],
+  jian: ['我要質詢！', '請市長答詢！', '來辯論阿！'],
+  he:   ['市長請上台！', '我要質詢！', '市長別跑！'],
+  xu:   ['來辯論阿！', '市長請上台！', '我要質詢！'],
+  boss: ['來辯論阿！', '市長請上台！', '我要質詢！'],
 };
+// 萬安's own reaction when he's spotted (the chasers never say 糟糕). The first is the main one: 2 of every 3.
+const PANIC = { LINES: ['糟糕，我不敢辯論', '糟糕，我不敢辯論', '糟糕，要被質詢了'], CD: 6, DUR: 2.2, COLOR: '#24407e' };
 const CHASER_ORDER = ['jian', 'wang', 'he', 'xu'];
 const LEVELS = [
   { place: '市府路巷弄', theme: 'alley' }, { place: '議會走廊', theme: 'council' }, { place: '萬華老街', theme: 'old' },
@@ -1261,7 +1263,7 @@ class Game {
     const lv = this.lv = genLevel(n, this.baseSeed + n * 7919);
     this.mapC = renderMap(lv); this.mapG = this.mapC.getContext('2d');
     const s = this.tileCenter(lv.start.x, lv.start.y);
-    this.p = { x: s.x, y: s.y, ang: 0, face: 1, fx: 1, fy: 0, anim: 0, moving: false, invuln: 1.5, slowT: 0, sweatT: 0, bubble: null, blinkT: 3, dustT: 0 };
+    this.p = { x: s.x, y: s.y, ang: 0, face: 1, fx: 1, fy: 0, anim: 0, moving: false, invuln: 1.5, slowT: 0, sweatT: 0, bubble: null, blinkT: 3, dustT: 0, panicCd: 0, panicN: 0 };
     // face into the maze
     const open = DIRS4.find(([dx, dy]) => !this.solidTile(lv.start.x + dx, lv.start.y + dy)) || [1, 0];
     this.p.fx = open[0]; this.p.fy = open[1]; this.p.ang = Math.atan2(open[1], open[0]); if (open[0]) this.p.face = open[0];
@@ -1434,7 +1436,7 @@ class Game {
   }
   updatePlayer(dt) {
     const p = this.p, v = this.input.vec, sp = PLAYER.SPEED * (p.slowT > 0 ? PLAYER.SLOW : 1);
-    p.slowT = Math.max(0, p.slowT - dt); p.invuln = Math.max(0, p.invuln - dt); p.sweatT = Math.max(0, p.sweatT - dt);
+    p.slowT = Math.max(0, p.slowT - dt); p.invuln = Math.max(0, p.invuln - dt); p.panicCd = Math.max(0, p.panicCd - dt); p.sweatT = Math.max(0, p.sweatT - dt);
     p.moving = Math.abs(v.x) + Math.abs(v.y) > 0.05;
     if (p.moving) {
       const d = Math.hypot(v.x, v.y);
@@ -1522,6 +1524,14 @@ class Game {
     if (!c.met) { c.met = true; this.toast(c.boss ? `魔王 ${NAMES.boss} 出現了！` : `${NAMES[c.kind]} 發現你了！`, c.boss ? '#ff7a7a' : '#ffd45e'); }
     for (let i = 0; i < 8; i++) this.glints.emit({ x: c.x, y: c.y - 26, vx: rand(-45, 45), vy: rand(-60, -20), g: 140, life: 0.45, color: i % 2 ? '#ff5a5a' : '#ffffff', size: 2 });
     this.p.sweatT = 1.6;
+    this.panic();
+  }
+  /** His bubble when someone spots him; cooldown so a pack of chasers doesn't spam it, and never cuts off another line. */
+  panic() {
+    const p = this.p;
+    if (p.panicCd > 0 || p.bubble || this.seq) return;
+    this.say(p, PANIC.LINES[p.panicN++ % PANIC.LINES.length], PANIC.DUR, PANIC.COLOR);
+    p.panicCd = PANIC.CD;
   }
   updateChaser(c, dt) {
     c.anim += dt; c.alertT -= dt; c.markT -= dt; c.cool = Math.max(0, c.cool - dt);
@@ -2108,11 +2118,12 @@ class Game {
         const k = clamp((0.9 - c.alertT) / 0.15, 0, 1), sc = k < 1 ? 1 + (1 - k) : 1;
         drawZh(ctx, '！', hx + 9, Math.max(HUD_H + 2, top - 6 - Math.round(Math.sin(this.time * 20) * 1)), { size: 14, weight: '900', color: '#ff4a4a', outline: '#ffffff', scale: sc, align: 'center' });
       } else if (c.markT > 0) drawZh(ctx, c.mark, hx + 9, Math.max(HUD_H + 2, top - 6), { size: 12, weight: 'bold', color: '#d4dcff', outline: PAL.ink, align: 'center', alpha: clamp(c.markT * 3, 0, 1) });
-      if (c.bubble) this.drawBubble(ctx, c.bubble, hx, top - 1);
     }
-    const p = this.p;
-    if (p.bubble) this.drawBubble(ctx, p.bubble, p.x - ox, p.y - oy + FEET - 26);
-    if (this.minion && this.minion.bubble) this.drawBubble(ctx, this.minion.bubble, this.minion.x - ox, this.minion.y - oy + FEET - 26 - this.minion.z);
+    const p = this.p, placed = [];
+    if (p.bubble) this.drawBubble(ctx, p.bubble, p.x - ox, p.y - oy + FEET - 26, placed);
+    if (this.minion && this.minion.bubble) this.drawBubble(ctx, this.minion.bubble, this.minion.x - ox, this.minion.y - oy + FEET - 26 - this.minion.z, placed);
+    for (const c of this.chasers) if (c.spr && c.bubble) this.drawBubble(ctx, c.bubble, c.x - ox, c.sy - 1, placed);
+    this.bubbleRects = placed;   // exposed for the headless overlap check
     if (playing && p.sweatT > 0 && !this.seq) {
       const k = (this.time * 2) % 1;
       ctx.fillStyle = '#8fd3ff';
@@ -2121,14 +2132,24 @@ class Game {
     for (const t of this.texts) {
       const k = t.t / t.dur, a = k > 0.75 ? (1 - k) / 0.25 : 1, latin = /^[\x20-\x7e]+$/.test(t.str);
       const hw = (latin ? textWidth(t.str) : zhWidth(t.str, 11, 'bold')) / 2 + 3;
-      const x = clamp(t.x - ox, hw, VIEW_W - hw), y = Math.max(HUD_H + 3, t.y - oy - easeOutCubic(Math.min(1, k * 1.6)) * 10);
+      const x = clamp(t.x - ox, hw, VIEW_W - hw);
+      let y = Math.max(HUD_H + 3, t.y - oy - easeOutCubic(Math.min(1, k * 1.6)) * 10);
+      // never print over a speech bubble: hop above it (or below if the HUD is in the way)
+      const rs = this.bubbleRects || [], hit = (yy) => rs.find((r) => x - hw < r.x + r.w && x + hw > r.x && yy < r.y + r.h + 1 && yy + 13 > r.y);
+      for (let i = 0, r; i < 3 && (r = hit(y)); i++) y = r.y - 14 >= HUD_H + 3 ? r.y - 14 : r.y + r.h + 1;
       if (latin) drawText(ctx, t.str, x, y, { align: 'center', color: t.color, outline: PAL.ink, alpha: a });
       else drawZh(ctx, t.str, x, y, { size: 11, weight: 'bold', align: 'center', color: t.color, outline: PAL.ink, alpha: a });
     }
   }
-  drawBubble(ctx, b, cx, bottom) {
-    const s = MX.bubble(b.text, b.color);
-    const x = clamp(Math.round(cx - s.w / 2), 2, VIEW_W - s.w - 2), y = Math.max(HUD_H + 2, Math.round(bottom - s.h));
+  drawBubble(ctx, b, cx, bottom, placed) {
+    const s = MX.bubble(b.text, b.color), top0 = HUD_H + 2;
+    const x = clamp(Math.round(cx - s.w / 2), 2, VIEW_W - s.w - 2);
+    let y = Math.max(top0, Math.round(bottom - s.h));
+    if (placed) {
+      const hit = (yy) => placed.find((r) => x < r.x + r.w + 1 && x + s.w + 1 > r.x && yy < r.y + r.h + 1 && yy + s.h + 1 > r.y);
+      for (let i = 0, r; i < 4 && (r = hit(y)); i++) y = r.y - s.h - 1 >= top0 ? r.y - s.h - 1 : r.y + r.h + 1;
+      placed.push({ x, y, w: s.w, h: s.h, text: b.text });
+    }
     ctx.globalAlpha = clamp(b.t * 6, 0, 1);
     blit(ctx, s, x, y);
     ctx.globalAlpha = 1;
@@ -2157,7 +2178,14 @@ class Game {
       if (dx > 0) t = Math.min(t, (x1 - px) / dx); if (dx < 0) t = Math.min(t, (x0 - px) / dx);
       if (dy > 0) t = Math.min(t, (y1 - py) / dy); if (dy < 0) t = Math.min(t, (y0 - py) / dy);
       if (!isFinite(t)) continue;
-      const ax = px + dx * t, ay = py + dy * t, pulse = m.label ? 1 + 0.25 * Math.sin(this.time * 10) : 1, s = m.size * pulse;
+      let ax = px + dx * t, ay = py + dy * t;
+      // keep pointers out of the bottom-centre notice strip while a toast is up
+      if (this.toasts.length && dy > 0) {
+        const top = VIEW_H - 21 - (this.toasts.length - 1) * 17 - 8;
+        const half = Math.max(...this.toasts.map((q) => zhWidth(q.text, 11, 'bold'))) / 2 + 18;
+        if (ay > top && Math.abs(ax - VIEW_W / 2) < half) { const t2 = (top - py) / dy; ax = px + dx * t2; ay = py + dy * t2; }
+      }
+      const pulse = m.label ? 1 + 0.25 * Math.sin(this.time * 10) : 1, s = m.size * pulse;
       ctx.save();
       ctx.globalAlpha = m.alpha || 1;
       ctx.translate(ax, ay); ctx.rotate(a);
