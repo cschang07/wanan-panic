@@ -129,6 +129,29 @@ const CURRENT = { WARN: 1.15, LIFE: 5.2, SPEED: 81, SLOW: 0.45, SLOW_T: 0.9, HIT
 /** Player-chopped street trees: hold Space ~2.4s while adjacent & facing. */
 const TREE = { MAX_HP: 2.4, RANGE: 1 };
 
+/** Live touch-copy switch: coarse pointer, mobile-fill layout, or first touch/pen. */
+function wantTouchPrompt() {
+  try {
+    const g = (typeof wananMaze !== 'undefined' && wananMaze.game) || (typeof game !== 'undefined' ? game : null);
+    if (g && g.input && g.input.touchUI) return true;
+  } catch (_) {}
+  if (typeof document !== 'undefined' && document.body && document.body.classList.contains('mobile-fill')) return true;
+  try { if (matchMedia('(pointer: coarse)').matches) return true; } catch (_) {}
+  return false;
+}
+/** Title/help/end: desktop = 按[空白鍵]… ; touch = 點一下… (no keycap). */
+function drawActionPrompt(ctx, action, cx, y, color, alpha = 1, pressed = false, backing = false) {
+  if (wantTouchPrompt()) {
+    const label = action === '再戰連任' ? '點一下重來' : `點一下${action}`;
+    const w = zhWidth(label, 12, 'bold') + 14;
+    if (backing) drawBacking(ctx, cx, y - 6, w, 24, 0.55 * alpha);
+    const blink = pressed ? 0.55 + 0.45 * alpha : alpha;
+    drawZh(ctx, label, cx, y, { size: 12, weight: 'bold', align: 'center', color, alpha: blink, outline: (color === '#2a2433' || color === PAL.ink) ? null : '#2a2433' });
+    return;
+  }
+  drawPrompt(ctx, '按', '空白鍵', action, cx, y, color, alpha, pressed, backing);
+}
+
 const NAMES = { player: '蔣萬安', boss: '沈伯洋', jian: '簡舒培', he: '何孟樺', xu: '許淑華' };
 const BUBBLE_TEXT = '來辯論阿';
 // 議員質詢 lines (市長自己回答！ is the most common). 「來辯論阿」 is reserved for 沈伯洋.
@@ -1564,7 +1587,7 @@ class Game {
   onPrimary(t) {
     if (this.state === 'playing' && !this.paused) {
       // Hold Space by a tree = chop; otherwise Space tap = smart throw.
-      if (this.faceTree()) { this.chopping = true; this.tipOnce('tree', '按住空白鍵砍樹開路！', '#a8e89a'); return; }
+      if (this.faceTree()) { this.chopping = true; this.tipOnce('tree', wantTouchPrompt() ? '按住「砍」鍵砍樹開路！' : '按住空白鍵砍樹開路！', '#a8e89a'); return; }
       this.smartThrow();
     } else this.onConfirm(t);
   }
@@ -1619,7 +1642,7 @@ class Game {
   onButton(id) {
     if (id === 'pause') this.togglePause();
     else if (id === 'act' || id === 'chop') {
-      if (this.faceTree()) { this.input.chopTouch = true; this.chopping = true; this.tipOnce('tree', '按住砍樹開路！', '#a8e89a'); }
+      if (this.faceTree()) { this.input.chopTouch = true; this.chopping = true; this.tipOnce('tree', wantTouchPrompt() ? '按住「砍」鍵砍樹開路！' : '按住空白鍵砍樹開路！', '#a8e89a'); }
       else this.smartThrow();
     }
     else if (id === 'squid') this.throwSquid();
@@ -2130,12 +2153,12 @@ class Game {
       case 'squid':
         if (this.inv.squid >= 9) return false;
         this.inv.squid++; this.score += 20; say('+小卷', '#ffb0c8');
-        this.tipOnce('squid', '空白鍵丟小卷・議員跑廁所 3 秒', '#ffb0c8');
+        this.tipOnce('squid', wantTouchPrompt() ? '點「丟」丟小卷・議員跑廁所 3 秒' : '空白鍵丟小卷・議員跑廁所 3 秒', '#ffb0c8');
         return true;
       case 'berry':
         if (this.inv.berry >= 3) return false;
         this.inv.berry++; this.score += 40; say('+大藍莓', '#c9b4ff');
-        this.tipOnce('berry', '附近人多時空白鍵會丟大藍莓吵架', '#c9b4ff');
+        this.tipOnce('berry', wantTouchPrompt() ? '附近人多時點「丟」會丟大藍莓吵架' : '附近人多時空白鍵會丟大藍莓吵架', '#c9b4ff');
         return true;
       case 'phone':
         if (this.inv.save > 0) return false;
@@ -3226,7 +3249,7 @@ class Game {
       // shake the bar while cutting
       ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(bx, by, Math.round(bw * (1 - pct)), 1);
     } else {
-      drawZh(ctx, '按住空白鍵砍樹', cx, by - 12, { align: 'center', size: 10, weight: 'bold', color: '#a8e89a', outline: PAL.ink });
+      drawZh(ctx, wantTouchPrompt() ? '按住「砍」鍵砍樹' : '按住空白鍵砍樹', cx, by - 12, { align: 'center', size: 10, weight: 'bold', color: '#a8e89a', outline: PAL.ink });
     }
   }
   drawBanner(ctx) {
@@ -3283,7 +3306,7 @@ class Game {
   drawPause(ctx) {
     ctx.fillStyle = 'rgba(10,8,25,0.55)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     drawZh(ctx, '暫停', VIEW_W / 2, 82, { size: 24, weight: '900', align: 'center', color: '#ffffff', outline: PAL.ink });
-    drawZh(ctx, '按 P、空白鍵或點一下繼續', VIEW_W / 2, 118, { size: 12, weight: 'bold', align: 'center', color: '#ffffff', alpha: 0.75 + 0.25 * Math.sin(this.time * 4) });
+    drawZh(ctx, wantTouchPrompt() ? '點一下繼續' : '按 P、空白鍵或點一下繼續', VIEW_W / 2, 118, { size: 12, weight: 'bold', align: 'center', color: '#ffffff', alpha: 0.75 + 0.25 * Math.sin(this.time * 4) });
   }
 
   panel(ctx, x, y, w, h) {
@@ -3468,7 +3491,7 @@ class Game {
     drawZh(ctx, `得分 ${Math.floor(this.score)}`, cx, y0 + 128, { align: 'center', color: PAL.ink, weight: 'bold' });
     if (this.acceptAt !== null) {
       const a = Math.min(1, (T - CARD.LOCK) * 3);
-      drawPrompt(ctx, '按', '空白鍵', '再戰連任', cx, y0 + ch + 14, '#ffffff', a, this.time % 1.1 < 0.18);
+      drawActionPrompt(ctx, '再戰連任', cx, y0 + ch + 14, '#ffffff', a, this.time % 1.1 < 0.18);
     }
     this.cardFx.draw(ctx);
   }
@@ -3481,6 +3504,7 @@ class Game {
     // Panel holds list + controls; start prompt sits alone well below the panel edge.
     const panX = 6, panY = 17, panW = VIEW_W - 12, panH = 162;
     this.panel(ctx, panX, panY, panW, panH);
+    const touch = wantTouchPrompt();
     const rows = [
       [MX.milk, '鮮奶', '補手電筒電力（有假的）', '#bfe6ff'],
       [MX.squid, '小卷', '丟出・議員跑廁所停 3 秒', '#ffb0c8'],
@@ -3488,7 +3512,7 @@ class Game {
       [MX.phone, '首長救駕', '被抓時替你答詢一次不扣命', '#9cc8ff'],
       [MX.chars.jian.walk[1].r, '議員', '被抓到會扣一命', '#ff9a8a'],
       [null, '洋流', '碰到扣命・紅邊警告快閃', '#7ec8ff'],
-      [null, '樹', '按住空白鍵砍掉・開新路', '#a8e89a'],
+      [null, '樹', touch ? '按住「砍」鍵砍掉・開新路' : '按住空白鍵砍掉・開新路', '#a8e89a'],
       [null, '連任門', '關卡目標（但會跑掉）', '#ffd45e'],
       [MX.rat[0].r, '老鼠／蟑螂', '踩到腳滑減速！', '#e0b0ff'],
     ];
@@ -3516,10 +3540,15 @@ class Game {
     // Controls in the free bottom-right under 老鼠／蟑螂 (right col), not under the start prompt.
     const cx = x0 + colW, cy = y0 + 4 * rowH;   // aligns with left「議員」row / below「老鼠」
     ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(cx - 2, cy - 1, colW - 4, 26);
-    drawZh(ctx, '操作：方向鍵／WASD・空白鍵丟／按住砍', cx + colW / 2 - 4, cy, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
-    drawZh(ctx, '手機：左拖曳・右下點＝丟、按住＝砍', cx + colW / 2 - 4, cy + 12, { size: 10, align: 'center', color: '#d0cce4' });
+    if (touch) {
+      drawZh(ctx, '操作：左半邊拖曳移動', cx + colW / 2 - 4, cy, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
+      drawZh(ctx, '右下「丟／砍」・點一下丟、按住砍', cx + colW / 2 - 4, cy + 12, { size: 10, align: 'center', color: '#d0cce4' });
+    } else {
+      drawZh(ctx, '操作：方向鍵／WASD・空白鍵丟／按住砍', cx + colW / 2 - 4, cy, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
+      drawZh(ctx, '手機：左拖曳・右下點＝丟、按住＝砍', cx + colW / 2 - 4, cy + 12, { size: 10, align: 'center', color: '#d0cce4' });
+    }
     // Start prompt alone below panel — panel ends at panY+panH (=179); prompt at 208 leaves ≥20px clear.
-    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, Math.min(208, VIEW_H - 16), '#ffffff', 1, this.time % 1.1 < 0.18, true);
+    drawActionPrompt(ctx, '開始', VIEW_W / 2, Math.min(208, VIEW_H - 16), '#ffffff', 1, this.time % 1.1 < 0.18, true);
   }
 
   drawTitle(ctx) {
@@ -3558,7 +3587,7 @@ class Game {
     this.panel(ctx, lx, 174, pair, 28);
     drawZh(ctx, '手電筒照到才看得見人・找到「連任」大門！', VIEW_W / 2, 177, { size: 11, weight: 'bold', align: 'center', color: '#ffffff' });
     drawZh(ctx, '下一頁有完整玩法說明', VIEW_W / 2, 191, { size: 10, align: 'center', color: '#c8c4dc' });
-    drawPrompt(ctx, '按', '空白鍵', '看玩法', VIEW_W / 2, Math.min(208, VIEW_H - 16), '#ffffff', 1, this.time % 1.1 < 0.18, true);
+    drawActionPrompt(ctx, '看玩法', VIEW_W / 2, Math.min(208, VIEW_H - 16), '#ffffff', 1, this.time % 1.1 < 0.18, true);
     if (this.hi > 0) drawText(ctx, 'HI ' + String(this.hi).padStart(6, '0'), VIEW_W - 6, 5, { align: 'right', color: '#ffe9a8', outline: PAL.ink });
   }
 
@@ -3633,7 +3662,7 @@ class Game {
     ctx.restore();
     if (this.acceptAt !== null) {
       const a = Math.min(1, (T - CARD.LOCK) * 3);
-      drawPrompt(ctx, '按', '空白鍵', '再戰連任', cx, y + 186, PAL.ink, a, this.time % 1.1 < 0.18);
+      drawActionPrompt(ctx, '再戰連任', cx, y + 186, PAL.ink, a, this.time % 1.1 < 0.18);
     }
     this.cardFx.draw(ctx);
   }
@@ -3765,7 +3794,7 @@ requestAnimationFrame(frame);
 // Debug / test hooks.
 const tc = (tx, ty) => ({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 });
 window.wananMaze = {
-  game, MX, SPR, TILE, SURVIVE, BOSS_HP, ENDERS, ENDER_NAMES, get VIEW_W() { return VIEW_W; }, get VIEW_H() { return VIEW_H; }, get BASE_VIEW_W() { return BASE_VIEW_W; }, get BASE_VIEW_H() { return BASE_VIEW_H; }, tryEnterFullscreen, isMobileLayout, resize,
+  game, MX, SPR, TILE, SURVIVE, BOSS_HP, ENDERS, ENDER_NAMES, get VIEW_W() { return VIEW_W; }, get VIEW_H() { return VIEW_H; }, get BASE_VIEW_W() { return BASE_VIEW_W; }, get BASE_VIEW_H() { return BASE_VIEW_H; }, tryEnterFullscreen, isMobileLayout, resize, wantTouchPrompt,
   teleport(tx, ty) { const c = tc(tx, ty); game.p.x = c.x; game.p.y = c.y; game.updateFields(); game.updateCamera(0, true); game.computeLight(); },
   face(dx, dy) { const p = game.p; p.fx = dx; p.fy = dy; p.ang = Math.atan2(dy, dx); if (dx) p.face = dx > 0 ? 1 : -1; game.computeLight(); },
   tileOf(x, y) { return [Math.floor(x / TILE), Math.floor(y / TILE)]; },
