@@ -2,25 +2,84 @@
 <html lang="zh-Hant-TW">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#10142c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>萬安心驚驚</title>
 <style>
-  html, body { margin: 0; height: 100%; }
+  html, body {
+    margin: 0; width: 100%; height: 100%;
+    width: 100dvw; height: 100dvh;
+    overflow: hidden; position: fixed; inset: 0;
+    overscroll-behavior: none;
+  }
   body {
-    display: flex; align-items: center; justify-content: center; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
     background: radial-gradient(ellipse at 50% 40%, #262b50 0%, #13162d 60%, #0a0b18 100%);
-    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
   }
   canvas {
     display: block; image-rendering: pixelated; image-rendering: crisp-edges;
     border-radius: 10px; outline: none; cursor: pointer;
     box-shadow: 0 24px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.07), 0 0 80px rgba(255,214,120,.10);
+    touch-action: none;
   }
+  /* Mobile landscape: canvas fills the safe content box (no letterbox). */
+  body.mobile-fill {
+    align-items: stretch; justify-content: stretch;
+    background: #0a0b18;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    box-sizing: border-box;
+  }
+  body.mobile-fill canvas {
+    width: 100% !important; height: 100% !important;
+    border-radius: 0; box-shadow: none; max-width: none; max-height: none;
+  }
+  #rotate-overlay {
+    display: none; position: fixed; inset: 0; z-index: 10000;
+    background: #0a0b18; color: #fff8e8;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; padding: env(safe-area-inset-top, 0px) 24px env(safe-area-inset-bottom, 0px);
+    touch-action: none; user-select: none;
+  }
+  body.portrait #rotate-overlay { display: flex; }
+  #rotate-overlay .phone {
+    font-size: 64px; line-height: 1;
+    animation: rotate-hint 1.6s ease-in-out infinite;
+    transform-origin: 50% 60%;
+  }
+  #rotate-overlay .msg { font: 900 22px/1.3 system-ui, "Noto Sans TC", "PingFang TC", sans-serif; letter-spacing: 0.04em; }
+  #rotate-overlay .sub { font: 600 14px/1.4 system-ui, "Noto Sans TC", "PingFang TC", sans-serif; color: #c8c4dc; }
+  @keyframes rotate-hint {
+    0%, 100% { transform: rotate(0deg); }
+    35% { transform: rotate(90deg); }
+    70% { transform: rotate(90deg); }
+  }
+  #fs-btn {
+    display: none; position: fixed; z-index: 9990;
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    left: calc(env(safe-area-inset-left, 0px) + 8px);
+    padding: 8px 12px; border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 999px; background: rgba(18,17,40,0.72); color: #fff8e8;
+    font: 700 13px/1 system-ui, "Noto Sans TC", "PingFang TC", sans-serif;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    touch-action: manipulation; cursor: pointer;
+  }
+  body.mobile-fill:not(.portrait) #fs-btn { display: block; }
+  body.mobile-fill.is-fs #fs-btn { display: none; }
 </style>
 </head>
 <body>
 <canvas id="game" tabindex="0" aria-label="萬安心驚驚：方向鍵或 WASD 移動，空白鍵丟小卷，K 丟大藍莓，P 暫停。"></canvas>
+<div id="rotate-overlay" aria-hidden="true">
+  <div class="phone" aria-hidden="true">📱</div>
+  <div class="msg">請把手機轉橫 📱↻</div>
+  <div class="sub">遊戲僅支援橫向畫面</div>
+</div>
+<button type="button" id="fs-btn" aria-label="全螢幕">全螢幕</button>
 <script>
 'use strict';
 /*
@@ -39,8 +98,10 @@
 (() => {
 
 // ───────────────────────────── 1. CONFIG ─────────────────────────────
-const VIEW_W = 400;
-const VIEW_H = 224;
+const BASE_VIEW_W = 400;
+const BASE_VIEW_H = 224;
+let VIEW_W = BASE_VIEW_W;
+let VIEW_H = BASE_VIEW_H;
 const TILE = 20;
 const HUD_H = 18;
 const FEET = 5;                       // sprites stand this far below their ground point
@@ -1335,7 +1396,7 @@ class Input {
   constructor(el, h) {
     this.k = { up: false, down: false, left: false, right: false };
     this.space = false; this.chopTouch = false;   // held for tree-chop
-    this.joy = null; this.touchUI = false;
+    this.joy = null; this.touchUI = false; this.fsAsked = false;
     const MAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
     window.addEventListener('keydown', (e) => {
       const m = MAP[e.code];
@@ -1356,11 +1417,18 @@ class Input {
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault(); el.focus();
       if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
-      if (e.pointerType === 'touch' || e.pointerType === 'pen') this.touchUI = true;
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+        this.touchUI = true;
+        if (!this.fsAsked) { this.fsAsked = true; if (h.requestFs) h.requestFs(); }
+      }
       const p = logical(e), now = performance.now();
       const btn = this.touchUI ? h.hitButton(p) : null;
       if (btn) { h.button(btn); taps.set(e.pointerId, { btn, hold: btn === 'act' || btn === 'chop' }); return; }
-      if (e.pointerType !== 'mouse' && !this.joy && h.wantsJoystick(p)) { this.joy = { id: e.pointerId, ox: p.x, oy: p.y, x: p.x, y: p.y, t: now, moved: 0 }; return; }
+      if (e.pointerType !== 'mouse' && !this.joy && h.wantsJoystick(p)) {
+        const maxR = document.body.classList.contains('mobile-fill') ? 48 : 16;
+        this.joy = { id: e.pointerId, ox: p.x, oy: p.y, x: p.x, y: p.y, t: now, moved: 0, maxR };
+        return;
+      }
       taps.set(e.pointerId, { x: p.x, y: p.y, t: now, moved: 0 });
     });
     el.addEventListener('pointermove', (e) => {
@@ -1393,7 +1461,8 @@ class Input {
     let x = (this.k.right ? 1 : 0) - (this.k.left ? 1 : 0), y = (this.k.down ? 1 : 0) - (this.k.up ? 1 : 0);
     if (this.joy) {
       const dx = this.joy.x - this.joy.ox, dy = this.joy.y - this.joy.oy, d = Math.hypot(dx, dy);
-      if (d > 4) { const m = Math.min(1, d / 16); x = (dx / d) * m; y = (dy / d) * m; }
+      const reach = this.joy.maxR || 16;
+      if (d > 6) { const m = Math.min(1, d / reach); x = (dx / d) * m; y = (dy / d) * m; }
     }
     const d = Math.hypot(x, y);
     return d > 1 ? { x: x / d, y: y / d } : { x, y };
@@ -1413,6 +1482,7 @@ class Game {
     this.time = 0; this.shake = 0; this.flash = 0; this.flashColor = '255,255,255'; this.alarm = false; this.alarmLevel = 0;
     this.paused = false;
     this.debug = { god: false, noEvents: false };
+    this.orientPaused = false; this.needLandscape = false;
     this.input = new Input(canvas, {
       primary: (t) => this.onPrimary(t),
       primaryUp: () => { this.chopping = false; this.input.chopTouch = false; },
@@ -1424,10 +1494,18 @@ class Game {
       hitButton: (p) => this.hitButton(p),
       button: (b) => this.onButton(b),
       buttonUp: (b) => { if (b === 'act' || b === 'chop') { this.input.chopTouch = false; this.chopping = false; } },
-      wantsJoystick: (p) => !this.paused && ((this.state === 'playing' && p.x < VIEW_W * 0.62 && p.y > HUD_H) || (this.state === 'boss' && p.y > HUD_H)),
+      wantsJoystick: (p) => !this.paused && !this.needLandscape && ((this.state === 'playing' && p.x < VIEW_W * 0.55 && p.y > HUD_H) || (this.state === 'boss' && p.y > HUD_H)),
+      requestFs: () => tryEnterFullscreen(),
     });
     this.state = 'title'; this.stateT = 0;
     this.newGame(true);
+  }
+  /** Recreate view-sized buffers after VIEW_W/H change (mobile aspect adapt). */
+  onViewResize() {
+    [this.lightC, this.lightG] = makeCanvas(VIEW_W, VIEW_H);
+    this.vignette = Game.makeVignette();
+    if (this.cam && this.p) this.updateCamera(0, true);
+    if (this.state === 'playing' || this.state === 'title' || this.state === 'help') this.computeLight();
   }
   static makeVignette() {
     const [c, g] = makeCanvas(VIEW_W, VIEW_H);
@@ -1455,6 +1533,7 @@ class Game {
     this.newGame(false);
     this.state = 'playing'; this.stateT = 0; this.paused = false;
     this.levelBanner();
+    if (this.input.touchUI || document.body.classList.contains('mobile-fill')) tryEnterFullscreen();
   }
   loadLevel(n) {
     const lv = this.lv = genLevel(n, this.baseSeed + n * 7919);
@@ -1514,15 +1593,27 @@ class Game {
     this.toast(msg, color);
   }
   touchButtons() {
+    const mobile = this.input.touchUI || document.body.classList.contains('mobile-fill');
     const nearTree = this.state === 'playing' && this.faceTree();
-    return [
-      { id: 'act', x: VIEW_W - 30, y: VIEW_H - 30, r: 18, label: nearTree ? '砍' : '丟' },
-      { id: 'pause', x: VIEW_W - 14, y: HUD_H + 13, r: 9 },
-    ];
+    const actR = mobile ? Math.round(clamp(VIEW_H * 0.23, 48, 58)) : 18;
+    const pauseR = mobile ? 18 : 9;
+    const pad = mobile ? 14 : 8;
+    const btns = [{ id: 'pause', x: VIEW_W - pauseR - 10, y: HUD_H + pauseR + 8, r: pauseR }];
+    if (this.state === 'playing') {
+      btns.unshift({ id: 'act', x: VIEW_W - actR - pad, y: VIEW_H - actR - pad, r: actR, label: nearTree ? '砍' : '丟' });
+    }
+    return btns;
   }
   hitButton(p) {
-    if (this.state !== 'playing' || this.paused) return null;
-    const b = this.touchButtons().find((b) => Math.hypot(p.x - b.x, p.y - b.y) <= b.r + 4);
+    if (this.needLandscape) return null;
+    if (this.paused) {
+      const pause = this.touchButtons().find((b) => b.id === 'pause');
+      if (pause && Math.hypot(p.x - pause.x, p.y - pause.y) <= pause.r + 8) return 'pause';
+      return null;
+    }
+    if (this.state !== 'playing' && this.state !== 'boss') return null;
+    const slop = (this.input.touchUI || document.body.classList.contains('mobile-fill')) ? 10 : 4;
+    const b = this.touchButtons().find((b) => Math.hypot(p.x - b.x, p.y - b.y) <= b.r + slop);
     return b ? b.id : null;
   }
   onButton(id) {
@@ -1620,6 +1711,7 @@ class Game {
   // ── Update ──
   update(dt) {
     this.time += dt;
+    if (this.needLandscape) return;          // portrait overlay: freeze until landscape
     if (this.paused) return;
     this.stateT += dt;
     this.shake = Math.max(0, this.shake - dt * 18);
@@ -2671,6 +2763,7 @@ class Game {
     if (this.state === 'boss') {
       this.drawBossHud(ctx);
       if (this.banner) this.drawBanner(ctx);
+      if (this.input.touchUI) this.drawTouch(ctx);
       if (this.paused) this.drawPause(ctx);
     }
     if (this.state === 'bossWin') this.drawFakeWin(ctx);
@@ -3088,23 +3181,31 @@ class Game {
     });
   }
   drawTouch(ctx) {
+    const mobile = document.body.classList.contains('mobile-fill') || this.input.touchUI;
     const j = this.input.joy;
     if (j) {
-      ctx.globalAlpha = 0.35; ctx.fillStyle = '#ffffff';
-      ctx.beginPath(); ctx.arc(j.ox, j.oy, 16, 0, Math.PI * 2); ctx.fill();
-      const dx = j.x - j.ox, dy = j.y - j.oy, d = Math.hypot(dx, dy), k = d > 16 ? 16 / d : 1;
-      ctx.globalAlpha = 0.7; ctx.beginPath(); ctx.arc(j.ox + dx * k, j.oy + dy * k, 7, 0, Math.PI * 2); ctx.fill();
+      const R = j.maxR || (mobile ? 48 : 16), knob = mobile ? 18 : 7;
+      ctx.globalAlpha = mobile ? 0.28 : 0.35; ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(j.ox, j.oy, R, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = mobile ? 0.22 : 0.25; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = mobile ? 2 : 1;
+      ctx.beginPath(); ctx.arc(j.ox, j.oy, R, 0, Math.PI * 2); ctx.stroke();
+      const dx = j.x - j.ox, dy = j.y - j.oy, d = Math.hypot(dx, dy), k = d > R ? R / d : 1;
+      ctx.globalAlpha = mobile ? 0.62 : 0.7; ctx.beginPath(); ctx.arc(j.ox + dx * k, j.oy + dy * k, knob, 0, Math.PI * 2); ctx.fill();
       ctx.globalAlpha = 1;
     }
     for (const b of this.touchButtons()) {
-      ctx.globalAlpha = 0.55; ctx.fillStyle = PAL.ink; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 0.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = mobile ? 0.42 : 0.55; ctx.fillStyle = PAL.ink; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = mobile ? 2 : 1; ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 0.5, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
-      if (b.id === 'pause') { ctx.fillStyle = '#ffffff'; ctx.fillRect(b.x - 3, b.y - 3, 2, 6); ctx.fillRect(b.x + 1, b.y - 3, 2, 6); continue; }
+      if (b.id === 'pause') {
+        const w = mobile ? 4 : 2, h = mobile ? 12 : 6, g = mobile ? 3 : 1;
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(b.x - g - w, b.y - h / 2, w, h); ctx.fillRect(b.x + g, b.y - h / 2, w, h);
+        continue;
+      }
       if (b.id === 'act' || b.id === 'chop') {
         const hold = this.input.chopTouch || this.chopping;
         const lab = b.label || (this.faceTree() ? '砍' : '丟');
-        drawZh(ctx, lab, b.x, b.y - 6, { align: 'center', size: 13, weight: '900', color: hold ? '#ffd45e' : (lab === '砍' ? '#a8e89a' : '#ffffff'), outline: PAL.ink });
+        drawZh(ctx, lab, b.x, b.y - (mobile ? 10 : 6), { align: 'center', size: mobile ? 18 : 13, weight: '900', color: hold ? '#ffd45e' : (lab === '砍' ? '#a8e89a' : '#ffffff'), outline: PAL.ink });
         continue;
       }
     }
@@ -3375,7 +3476,8 @@ class Game {
   /** Second page after title: illustrated how-to, readable on mobile + desktop. */
   drawHelp(ctx) {
     ctx.fillStyle = 'rgba(12,14,36,0.55)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    drawZh(ctx, '玩法說明', VIEW_W / 2, 2, { size: 13, weight: '900', align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.45)' });
+    const big = VIEW_W > 440;
+    drawZh(ctx, '玩法說明', VIEW_W / 2, 2, { size: big ? 15 : 13, weight: '900', align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.45)' });
     // Panel holds list + controls; start prompt sits alone well below the panel edge.
     const panX = 6, panY = 17, panW = VIEW_W - 12, panH = 162;
     this.panel(ctx, panX, panY, panW, panH);
@@ -3390,7 +3492,7 @@ class Game {
       [null, '連任門', '關卡目標（但會跑掉）', '#ffd45e'],
       [MX.rat[0].r, '老鼠／蟑螂', '踩到腳滑減速！', '#e0b0ff'],
     ];
-    const colW = 188, x0 = 14, y0 = panY + 4, rowH = 23;
+    const colW = Math.floor((VIEW_W - 28) / 2), x0 = 14, y0 = panY + 4, rowH = 23;
     rows.forEach((row, i) => {
       const col = i < 5 ? 0 : 1, ri = i < 5 ? i : i - 5;
       const x = x0 + col * colW, y = y0 + ri * rowH;
@@ -3417,7 +3519,7 @@ class Game {
     drawZh(ctx, '操作：方向鍵／WASD・空白鍵丟／按住砍', cx + colW / 2 - 4, cy, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
     drawZh(ctx, '手機：左拖曳・右下點＝丟、按住＝砍', cx + colW / 2 - 4, cy + 12, { size: 10, align: 'center', color: '#d0cce4' });
     // Start prompt alone below panel — panel ends at panY+panH (=179); prompt at 208 leaves ≥20px clear.
-    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, 208, '#ffffff', 1, this.time % 1.1 < 0.18, true);
+    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, Math.min(208, VIEW_H - 16), '#ffffff', 1, this.time % 1.1 < 0.18, true);
   }
 
   drawTitle(ctx) {
@@ -3425,36 +3527,38 @@ class Game {
     const bob = Math.round(Math.sin(this.time * 2.2) * 1.2);
     drawZh(ctx, '萬安心驚驚', VIEW_W / 2, 7 + bob, { pixel: true, size: 16, weight: '900', scale: 2, align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.5)' });
     drawZh(ctx, '手電筒迷宮大逃亡・連任大門在哪裡？', VIEW_W / 2, 47, { size: 12, weight: 'bold', align: 'center', color: '#ffffff', outline: PAL.ink });
-    // left: who's after you
-    this.panel(ctx, 8, 66, 188, 104);
-    drawZh(ctx, '議員追兵', 16, 71, { size: 11, weight: 'bold', color: '#ff9a8a' });
+    // left: who's after you (centered pair when VIEW is wider than base)
+    const tw = 188, gap = 8, pair = tw * 2 + gap;
+    const lx = Math.round((VIEW_W - pair) / 2), rx = lx + tw + gap;
+    this.panel(ctx, lx, 66, tw, 104);
+    drawZh(ctx, '議員追兵', lx + 8, 71, { size: 11, weight: 'bold', color: '#ff9a8a' });
     const cast = ['jian', 'he', 'xu', 'boss'];
     cast.forEach((k, i) => {
-      const cx = 32 + i * 42, by = 126, set = MX.chars[k].walk[Math.floor(this.time * 5 + i) % 4], s = set.r;
+      const cx = lx + 24 + i * 42, by = 126, set = MX.chars[k].walk[Math.floor(this.time * 5 + i) % 4], s = set.r;
       this.shadow(ctx, cx, by - 1);
       this.put(ctx, s, cx, by);
       drawZh(ctx, NAMES[k], cx, by + 4, { size: 10, weight: 'bold', align: 'center', color: k === 'boss' ? '#ff8a8a' : '#ffffff' });
       if (k === 'boss') drawZh(ctx, '魔王', cx, by - 34, { size: 10, weight: '900', align: 'center', color: '#ff5a5a', outline: PAL.ink });
     });
-    drawZh(ctx, '被看見就衝過來質詢！', 102, 153, { size: 10, weight: 'bold', align: 'center', color: '#ffb0a0' });
+    drawZh(ctx, '被看見就衝過來質詢！', lx + tw / 2, 153, { size: 10, weight: 'bold', align: 'center', color: '#ffb0a0' });
     // right: items
-    this.panel(ctx, 204, 66, 188, 104);
-    drawZh(ctx, '道具', 212, 71, { size: 11, weight: 'bold', color: '#a8e89a' });
+    this.panel(ctx, rx, 66, tw, 104);
+    drawZh(ctx, '道具', rx + 8, 71, { size: 11, weight: 'bold', color: '#a8e89a' });
     const items = [
       [MX.squid, '小卷', '擊暈 3 秒'], [MX.bigBerry, '大藍莓', '讓追兵吵架'],
       [MX.milk, '鮮奶', '手電筒電池'], [MX.phone, '首長救駕', '擋一次質詢'],
       [null, '連任', '找到它…？'],
     ];
     items.forEach(([s, name, desc], i) => {
-      const cx = 216 + (i % 2) * 90, cy = 90 + Math.floor(i / 2) * 26;
+      const cx = rx + 12 + (i % 2) * 90, cy = 90 + Math.floor(i / 2) * 26;
       if (s) ctx.drawImage(s.canvas, Math.round(cx - s.w / 2), Math.round(cy + 6 - s.h / 2)); else this.drawMiniDoor(ctx, cx - 5, cy - 2);
       drawZh(ctx, name, cx + 10, cy - 2, { size: 11, weight: 'bold', color: '#ffffff' });
       drawZh(ctx, desc, cx + 10, cy + 11, { size: 10, color: '#c8c4dc' });
     });
-    this.panel(ctx, 8, 174, 384, 28);
+    this.panel(ctx, lx, 174, pair, 28);
     drawZh(ctx, '手電筒照到才看得見人・找到「連任」大門！', VIEW_W / 2, 177, { size: 11, weight: 'bold', align: 'center', color: '#ffffff' });
     drawZh(ctx, '下一頁有完整玩法說明', VIEW_W / 2, 191, { size: 10, align: 'center', color: '#c8c4dc' });
-    drawPrompt(ctx, '按', '空白鍵', '看玩法', VIEW_W / 2, 208, '#ffffff', 1, this.time % 1.1 < 0.18, true);
+    drawPrompt(ctx, '按', '空白鍵', '看玩法', VIEW_W / 2, Math.min(208, VIEW_H - 16), '#ffffff', 1, this.time % 1.1 < 0.18, true);
     if (this.hi > 0) drawText(ctx, 'HI ' + String(this.hi).padStart(6, '0'), VIEW_W - 6, 5, { align: 'right', color: '#ffe9a8', outline: PAL.ink });
   }
 
@@ -3539,15 +3643,111 @@ class Game {
 const canvas = document.getElementById('game');
 const game = new Game(canvas);
 
+function isMobileLayout() {
+  const ua = navigator.userAgent || '';
+  // Phones/Android (and Chrome device-emulation) always advertise a mobile UA.
+  if (/Mobi|Android|iPhone|iPod|webOS|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua)) return true;
+  // iPadOS 13+ may spoof MacIntel: touch + no hover + tablet-sized short edge.
+  const short = Math.min(screen.width || window.innerWidth, screen.height || window.innerHeight);
+  if (navigator.maxTouchPoints > 1 && matchMedia('(hover: none)').matches && short <= 834) return true;
+  return false;
+}
+function viewportSize() {
+  const vv = window.visualViewport;
+  let w = vv && vv.width ? vv.width : window.innerWidth;
+  let h = vv && vv.height ? vv.height : window.innerHeight;
+  // Prefer dvh-like fullness when the browser exposes layout vs visual mismatch.
+  w = Math.max(1, Math.floor(w)); h = Math.max(1, Math.floor(h));
+  return { w, h };
+}
+function tryEnterFullscreen() {
+  try {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen;
+    if (req && !document.fullscreenElement && !document.webkitFullscreenElement) req.call(el).catch(() => {});
+  } catch (_) {}
+  try {
+    if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+  } catch (_) {}
+}
+function syncFsClass() {
+  const on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  document.body.classList.toggle('is-fs', on);
+}
 function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  const maxW = window.innerWidth - 16, maxH = window.innerHeight - 16;
-  PX = Math.max(1, Math.floor(Math.min((maxW * dpr) / VIEW_W, (maxH * dpr) / VIEW_H)));
-  canvas.width = VIEW_W * PX; canvas.height = VIEW_H * PX;
-  canvas.style.width = `${(VIEW_W * PX) / dpr}px`; canvas.style.height = `${(VIEW_H * PX) / dpr}px`;
+  const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 3));
+  const mobile = isMobileLayout();
+  const { w: vw, h: vh } = viewportSize();
+  const portrait = vh > vw;
+  document.body.classList.toggle('mobile-fill', mobile);
+  document.body.classList.toggle('portrait', mobile && portrait);
+  const rot = document.getElementById('rotate-overlay');
+  if (rot) rot.setAttribute('aria-hidden', mobile && portrait ? 'false' : 'true');
+
+  game.needLandscape = !!(mobile && portrait);
+  if (game.needLandscape) {
+    if ((game.state === 'playing' || game.state === 'boss') && !game.paused) {
+      game.orientPaused = true;
+      game.paused = true;
+    }
+  } else if (game.orientPaused) {
+    game.paused = false;
+    game.orientPaused = false;
+  }
+
+  const prevW = VIEW_W, prevH = VIEW_H;
+  if (mobile) {
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    void document.body.offsetWidth; // apply safe-area padding + stretch before measuring
+    const cssW = Math.max(1, canvas.clientWidth || vw);
+    const cssH = Math.max(1, canvas.clientHeight || vh);
+    const aspect = cssW / cssH;
+    // Adaptive camera: ~224px tall design, wider FOV on wide phones; preserve aspect (no stretch).
+    VIEW_H = BASE_VIEW_H;
+    VIEW_W = Math.round(VIEW_H * aspect);
+    if (VIEW_W > 640) { VIEW_W = 640; VIEW_H = Math.max(200, Math.round(VIEW_W / aspect)); }
+    if (VIEW_W % 2) VIEW_W++;
+    if (VIEW_H % 2) VIEW_H++;
+    PX = Math.max(1, (cssW * dpr) / VIEW_W);
+    if (PX > 3.5) PX = 3.5; // keep CJK crisp without melting mid-range phones
+    canvas.width = Math.max(1, Math.round(VIEW_W * PX));
+    canvas.height = Math.max(1, Math.round(VIEW_H * PX));
+  } else {
+    VIEW_W = BASE_VIEW_W;
+    VIEW_H = BASE_VIEW_H;
+    const maxW = window.innerWidth - 16, maxH = window.innerHeight - 16;
+    PX = Math.max(1, Math.floor(Math.min((maxW * dpr) / VIEW_W, (maxH * dpr) / VIEW_H)));
+    canvas.width = VIEW_W * PX;
+    canvas.height = VIEW_H * PX;
+    canvas.style.width = `${(VIEW_W * PX) / dpr}px`;
+    canvas.style.height = `${(VIEW_H * PX) / dpr}px`;
+  }
+  if (VIEW_W !== prevW || VIEW_H !== prevH) game.onViewResize();
+  syncFsClass();
   game.render();
 }
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 80));
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', resize);
+  visualViewport.addEventListener('scroll', resize);
+}
+document.addEventListener('fullscreenchange', syncFsClass);
+document.addEventListener('webkitfullscreenchange', syncFsClass);
+const fsBtn = document.getElementById('fs-btn');
+if (fsBtn) fsBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); tryEnterFullscreen(); });
+// Block pinch-zoom / double-tap zoom remnants on iOS Safari.
+['gesturestart', 'gesturechange', 'gestureend'].forEach((ev) => {
+  document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+});
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+let lastTouchEnd = 0;
+document.addEventListener('touchend', (e) => {
+  const now = performance.now();
+  if (now - lastTouchEnd < 320) e.preventDefault();
+  lastTouchEnd = now;
+}, { passive: false });
 resize();
 canvas.focus();
 
@@ -3565,7 +3765,7 @@ requestAnimationFrame(frame);
 // Debug / test hooks.
 const tc = (tx, ty) => ({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 });
 window.wananMaze = {
-  game, MX, SPR, TILE, SURVIVE, BOSS_HP, ENDERS, ENDER_NAMES,
+  game, MX, SPR, TILE, SURVIVE, BOSS_HP, ENDERS, ENDER_NAMES, get VIEW_W() { return VIEW_W; }, get VIEW_H() { return VIEW_H; }, get BASE_VIEW_W() { return BASE_VIEW_W; }, get BASE_VIEW_H() { return BASE_VIEW_H; }, tryEnterFullscreen, isMobileLayout, resize,
   teleport(tx, ty) { const c = tc(tx, ty); game.p.x = c.x; game.p.y = c.y; game.updateFields(); game.updateCamera(0, true); game.computeLight(); },
   face(dx, dy) { const p = game.p; p.fx = dx; p.fy = dy; p.ang = Math.atan2(dy, dx); if (dx) p.face = dx > 0 ? 1 : -1; game.computeLight(); },
   tileOf(x, y) { return [Math.floor(x / TILE), Math.floor(y / TILE)]; },
