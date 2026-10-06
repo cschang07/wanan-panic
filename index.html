@@ -1,0 +1,2469 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#10142c">
+<title>萬安心驚驚</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 40%, #262b50 0%, #13162d 60%, #0a0b18 100%);
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  canvas {
+    display: block; image-rendering: pixelated; image-rendering: crisp-edges;
+    border-radius: 10px; outline: none; cursor: pointer;
+    box-shadow: 0 24px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.07), 0 0 80px rgba(255,214,120,.10);
+  }
+</style>
+</head>
+<body>
+<canvas id="game" tabindex="0" aria-label="萬安心驚驚：方向鍵或 WASD 移動，空白鍵丟小卷，K 丟大藍莓，P 暫停。"></canvas>
+<script>
+'use strict';
+/*
+ * 萬安心驚驚 — a top-down flashlight maze chase, sibling of 萬安衝衝衝 / 萬安大砲.
+ * Same engine bits: ASCII sprite compiler, chibi sprite kit, crisp vector CJK text. No sound at all:
+ * every cue is visual (banners, bubbles, '!' marks, red vignette, edge arrows, shakes, particles).
+ *
+ *   1. Config          5. Maze generation + tile art     8. Game (AI, events, sequences)
+ *   2. Utilities       6. Particles                      9. Rendering (light, HUD, title, card)
+ *   3. Pixel art/text  7. Input                         10. Boot
+ *   4. Sprites
+ *
+ * Satire is kept to publicly reported talking points and stays lighthearted: nobody gets hurt,
+ * chasers are only ever stunned (dizzy, arguing), and 萬安 only ever loses an election.
+ */
+(() => {
+
+// ───────────────────────────── 1. CONFIG ─────────────────────────────
+const VIEW_W = 400;
+const VIEW_H = 224;
+const TILE = 20;
+const HUD_H = 18;
+const FEET = 5;                       // sprites stand this far below their ground point
+const T_FLOOR = 0, T_WALL = 1, T_TREE = 2, T_UMB = 3;
+const solidT = (t) => t === T_WALL || t === T_TREE;
+
+const PLAYER = { SPEED: 66, LIVES: 3, INVULN: 2.4, HW: 5, HH: 4, SLOW_TIME: 1.2, SLOW: 0.5 };
+/** Unlit areas stay readable: a ~50% blue-tinted veil, never black. The flashlight punches it out fully. */
+const LIGHT = { DARK: 0.5, TINT: '16,20,54', HALF: 0.52, RANGE: 132, AURA: 34, DRAIN: 1.35, RAYS: 72 };
+const SIGHT = { NEAR: 5.5 * TILE, LIT: 9 * TILE, FORGET: 3.4, BOSS_FORGET: 2.6 };
+// End card timeline (seconds since it opened). Input stays locked until LOCK.
+const CARD = { IN: 0.35, ROW0: 0.4, ROW_DT: 0.13, STAMP: 1.6, SLAM: 0.12, LOCK: 2.0 };
+const STORAGE_HI = 'wanan.maze.hi';
+
+const NAMES = { player: '蔣萬安', boss: '沈伯洋', wang: '王義川', jian: '簡舒培', he: '何孟樺', xu: '許淑華' };
+const BUBBLE_TEXT = '來辯論阿';
+const LINES = {
+  wang: ['來辯論阿！', '糟糕！要來辯論了'],
+  jian: ['糟糕！要質詢了', '請市長答詢！'],
+  he:   ['糟糕！要質詢了', '市長別跑！'],
+  xu:   ['來辯論阿！', '糟糕！要質詢了'],
+  boss: ['糟糕！要來辯論了', '來辯論阿！'],
+};
+const CHASER_ORDER = ['jian', 'wang', 'he', 'xu'];
+const LEVELS = [
+  { place: '市府路巷弄', theme: 'alley' }, { place: '議會走廊', theme: 'council' }, { place: '萬華老街', theme: 'old' },
+  { place: '信義暗巷', theme: 'alley' }, { place: '議會地下室', theme: 'council' }, { place: '大稻埕騎樓', theme: 'old' },
+  { place: '北投坡道', theme: 'alley' }, { place: '南港舊廠區', theme: 'alley' },
+];
+const levelInfo = (n) => LEVELS[(n - 1) % LEVELS.length];
+const TREES = { REMOVED: 3164, REPLANTED: 778 };   // the reported ratio drives the 補植 counter
+
+const PAL = { ink: '#2a2433', star: '#ffd84a', gold: '#f2a93b', cream: '#fff7e6' };
+
+// ──────────────────────────── 2. UTILITIES ────────────────────────────
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const rand = (a, b) => a + Math.random() * (b - a);
+const randInt = (a, b) => Math.floor(rand(a, b + 1));
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const smoothstep = (t) => t * t * (3 - 2 * t);
+const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+const easeOutBack = (t) => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+const approach = (v, target, step) => (v < target ? Math.min(v + step, target) : Math.max(v - step, target));
+const pad5 = (n) => String(Math.floor(n)).padStart(5, '0');
+
+function mulberry32(seed) {
+  return () => {
+    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const mixRgb = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
+const css = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+/** Three-key blend: day → dusk (t = .5) → night (t = 1). */
+const tri = (day, dusk, night, t) => (t < 0.5 ? mixRgb(day, dusk, t * 2) : mixRgb(dusk, night, (t - 0.5) * 2));
+
+let PX = 1;                                     // device pixels per logical pixel (integer)
+const snap = (v) => Math.round(v * PX) / PX;    // snap to the device-pixel grid
+
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  return [c, g];
+}
+
+
+const shuffle = (a, r = Math.random) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const hash2 = (x, y, s) => { let h = (x * 374761393 + y * 668265263 + s * 1442695041) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return (h ^ (h >>> 16)) >>> 0; };
+const angDiff = (a, b) => { let d = (a - b) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
+// ──────────────────────────── 3. PIXEL ART ────────────────────────────
+/** Compile an ASCII sprite: auto 1px ink outline + interior-only collision mask. */
+function makeSprite(rows, palette, outline = PAL.ink) {
+  const pad = outline ? 1 : 0;
+  const w0 = Math.max(...rows.map((r) => r.length)), h0 = rows.length;
+  const w = w0 + pad * 2, h = h0 + pad * 2;
+  const [canvas, g] = makeCanvas(w, h);
+  const mask = new Uint8Array(w * h);
+  rows.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch !== ' ' && palette[ch]) mask[(y + pad) * w + x + pad] = 1;
+  }));
+  if (outline) {
+    g.fillStyle = outline;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (mask[y * w + x]) continue;
+      const n = (xx, yy) => xx >= 0 && yy >= 0 && xx < w && yy < h && mask[yy * w + xx];
+      if (n(x - 1, y) || n(x + 1, y) || n(x, y - 1) || n(x, y + 1)) g.fillRect(x, y, 1, 1);
+    }
+  }
+  rows.forEach((row, y) => [...row].forEach((ch, x) => {
+    if (ch === ' ' || !palette[ch]) return;
+    g.fillStyle = palette[ch];
+    g.fillRect(x + pad, y + pad, 1, 1);
+  }));
+  return { canvas, w, h, mask };
+}
+const mirror = (rows) => { const w = Math.max(...rows.map((r) => r.length)); return rows.map((r) => [...r.padEnd(w)].reverse().join('')); };
+
+function spritesOverlap(a, ax, ay, b, bx, by) {
+  const x0 = Math.max(ax, bx), x1 = Math.min(ax + a.w, bx + b.w);
+  const y0 = Math.max(ay, by), y1 = Math.min(ay + a.h, by + b.h);
+  if (x0 >= x1 || y0 >= y1) return false;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    if (a.mask[(y - ay) * a.w + (x - ax)] && b.mask[(y - by) * b.w + (x - bx)]) return true;
+  }
+  return false;
+}
+
+// ── Text: every string becomes a 1-bit "layout" of horizontal runs (fill + outline) ──
+function runsFromGrid(grid, gw, gh) {
+  const fill = [], out = [];
+  const push = (runs, x, y) => {
+    const last = runs[runs.length - 1];
+    if (last && last[1] === y && last[0] + last[2] === x) last[2]++; else runs.push([x, y, 1]);
+  };
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    if (grid[y * gw + x]) { push(fill, x, y); continue; }
+    let near = false;
+    for (let dy = -1; dy <= 1 && !near; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < gw && yy < gh && grid[yy * gw + xx]) { near = true; break; }
+    }
+    if (near) push(out, x, y);
+  }
+  return { fill, out };
+}
+
+/** 5×7 Latin bitmap font (digits, HUD). */
+const GLYPHS = (() => {
+  const src = {
+    A: '0e11111f111111', B: '1e11111e11111e', C: '0e11101010110e', D: '1c12111111121c',
+    E: '1f10101e10101f', F: '1f10101e101010', G: '0e11101711110f', H: '1111111f111111',
+    I: '0e04040404040e', J: '0702020202120c', K: '11121418141211', L: '1010101010101f',
+    M: '111b1515111111', N: '11111915131111', O: '0e11111111110e', P: '1e11111e101010',
+    Q: '0e11111115120d', R: '1e11111e141211', S: '0f10100e01011e', T: '1f040404040404',
+    U: '1111111111110e', V: '11111111110a04', W: '1111111515150a', X: '11110a040a1111',
+    Y: '1111110a040404', Z: '1f01020408101f',
+    0: '0e11131519110e', 1: '040c040404040e', 2: '0e11010204081f', 3: '1f02040201110e',
+    4: '02060a121f0202', 5: '1f101e0101110e', 6: '0608101e11110e', 7: '1f010204080808',
+    8: '0e11110e11110e', 9: '0e11110f01020c',
+    ' ': '00000000000000', '-': '0000000e000000', ':': '000c0c000c0c00', '!': '04040404040004',
+    '.': '00000000000c0c', '/': '00010204081000', '+': '0004041f040400', "'": '04040800000000',
+  };
+  const out = {};
+  for (const k in src) out[k] = Array.from({ length: 7 }, (_, i) => parseInt(src[k].substr(i * 2, 2), 16));
+  return out;
+})();
+
+const layouts = new Map();
+function cached(key, make) {
+  let L = layouts.get(key);
+  if (!L) { if (layouts.size > 600) layouts.clear(); L = make(); layouts.set(key, L); }
+  return L;
+}
+
+function layoutLatin(str) {
+  return cached('L' + str, () => {
+    const chars = [...str.toUpperCase()];
+    const w = Math.max(0, chars.length * 6 - 1), h = 7, gw = w + 2, gh = h + 2;
+    const grid = new Uint8Array(gw * gh);
+    chars.forEach((ch, i) => {
+      const g = GLYPHS[ch] || GLYPHS[' '];
+      for (let r = 0; r < 7; r++) for (let c = 0; c < 5; c++) if (g[r] & (16 >> c)) grid[(r + 1) * gw + i * 6 + c + 1] = 1;
+    });
+    return { w, h, ...runsFromGrid(grid, gw, gh) };
+  });
+}
+
+const CJK_FONT = '"PingFang TC","Noto Sans TC","Noto Sans CJK TC","Microsoft JhengHei","Heiti TC","Source Han Sans TC",sans-serif';
+/**
+ * Chinese text is drawn as real vector glyphs at *device* resolution (fillText under the PX
+ * transform), so it stays crisp and legible at every scale. Thresholding 12px glyphs to 1-bit
+ * merged strokes (王 read as 干), so the raster path below is kept only for big pixel-art logos
+ * and stamps where each glyph gets 16–30 logical pixels.
+ */
+const ZH_WEIGHT = { normal: '600', bold: '700', 900: '900' };
+const zhMeasure = makeCanvas(8, 8)[1];
+function layoutCJK(str, size = 12, weight = 'normal') {
+  return cached(`V${size}${weight}${str}`, () => {
+    const wt = ZH_WEIGHT[weight] || weight;
+    zhMeasure.font = `${wt} ${size}px ${CJK_FONT}`;
+    const m = zhMeasure.measureText(str), ref = zhMeasure.measureText('國');
+    const asc = ref.actualBoundingBoxAscent, desc = ref.actualBoundingBoxDescent;
+    return { vector: true, str, size, wt, left: m.actualBoundingBoxLeft, asc, w: Math.ceil(m.actualBoundingBoxLeft + m.actualBoundingBoxRight), h: Math.round(asc + desc) };
+  });
+}
+/** 1-bit raster of CJK text at `size` px (big pixel logos / stamps only). */
+function rasterCJK(str, size = 16, weight = 'bold') {
+  return cached(`C${size}${weight}${str}`, () => {
+    const W = Math.ceil(size * (str.length + 1) * 1.2) + 8, H = size * 2;
+    const raster = (text) => {
+      const [c, g] = makeCanvas(W, H);
+      g.font = `${weight} ${size}px ${CJK_FONT}`;
+      g.textBaseline = 'middle'; g.fillStyle = '#000';
+      g.fillText(text, 2, H / 2);
+      return g.getImageData(0, 0, W, H).data;
+    };
+    const thr = weight === 'normal' ? 100 : 128;
+    const ref = raster('國'), data = raster(str);
+    let top = H, bottom = -1, left = W, right = -1;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (ref[(y * W + x) * 4 + 3] >= thr) { top = Math.min(top, y); bottom = Math.max(bottom, y); }
+      if (data[(y * W + x) * 4 + 3] >= thr) { left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y); }
+    }
+    if (right < 0) return { w: 0, h: 0, fill: [], out: [] };
+    const w = right - left + 1, h = bottom - top + 1, gw = w + 2, gh = h + 2;
+    const grid = new Uint8Array(gw * gh);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (data[((y + top) * W + x + left) * 4 + 3] >= thr) grid[(y + 1) * gw + x + 1] = 1;
+    }
+    return { w, h, ...runsFromGrid(grid, gw, gh) };
+  });
+}
+
+function drawLayout(ctx, L, x, y, { color = '#fff', scale = 1, align = 'left', outline = null, shadow = null, alpha = 1 } = {}) {
+  if (alpha <= 0) return;
+  if (align === 'center') x -= (L.w * scale) / 2; else if (align === 'right') x -= L.w * scale;
+  if (L.vector) { drawVectorText(ctx, L, x, y, scale, color, outline, shadow, alpha); return; }
+  const ox = snap(x) - scale, oy = snap(y) - scale;
+  const paint = (runs, col, dy) => {
+    ctx.fillStyle = col;
+    for (const [rx, ry, len] of runs) ctx.fillRect(ox + rx * scale, oy + ry * scale + dy, len * scale, scale);
+  };
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  if (shadow) { paint(L.fill, shadow, scale); if (outline) paint(L.out, shadow, scale); }
+  if (outline) paint(L.out, outline, 0);
+  paint(L.fill, color, 0);
+  ctx.restore();
+}
+/** (x, y) is the top-left of the ink box, same contract as the pixel layouts. */
+function drawVectorText(ctx, L, x, y, scale, color, outline, shadow, alpha) {
+  const ox = snap(x + L.left * scale), oy = snap(y + L.asc * scale);
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.font = `${L.wt} ${L.size * scale}px ${CJK_FONT}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round'; ctx.lineWidth = 2.2 * scale;   // ≈1 logical px of outline outside the glyph
+  if (shadow) {
+    ctx.fillStyle = ctx.strokeStyle = shadow;
+    if (outline) ctx.strokeText(L.str, ox, oy + scale);
+    ctx.fillText(L.str, ox, oy + scale);
+  }
+  if (outline) { ctx.strokeStyle = outline; ctx.strokeText(L.str, ox, oy); }
+  ctx.fillStyle = color;
+  ctx.fillText(L.str, ox, oy);
+  ctx.restore();
+}
+/** drawImage for a sprite, plus the crisp vector label some sprites carry (speech-bubble text). */
+function blit(ctx, s, x, y) {
+  ctx.drawImage(s.canvas, x, y);
+  if (s.label) drawLayout(ctx, s.label.L, x + s.label.x, y + s.label.y, { color: s.label.color });
+}
+const drawText = (ctx, str, x, y, o) => drawLayout(ctx, layoutLatin(str), x, y, o);
+const textWidth = (str) => layoutLatin(str).w;
+const drawZh = (ctx, str, x, y, o = {}) => drawLayout(ctx, (o.pixel ? rasterCJK : layoutCJK)(str, o.size || 12, o.weight || 'normal'), x, y, o);
+const zhWidth = (str, size = 12, weight = 'normal') => layoutCJK(str, size, weight).w;
+
+function pixelRect(ctx, x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x + 1, y, w - 2, h);
+  ctx.fillRect(x, y + 1, w, h - 2);
+}
+
+/** Keyboard key-cap with a CJK label, e.g. [空白鍵]. `pressed` sinks it by a pixel. Returns its width. */
+function drawKeyCap(ctx, label, x, y, alpha = 1, pressed = false) {
+  const L = layoutCJK(label);
+  const w = L.w + 8, h = L.h + 6, d = pressed ? 1 : 0;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  pixelRect(ctx, x, y + d, w, h - d, PAL.ink);
+  pixelRect(ctx, x + 1, y + 1 + d, w - 2, h - 2 - d, '#cfc6dd');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x + 1, y + 1 + d, w - 2, h - 4 - (pressed ? 0 : 0));
+  ctx.restore();
+  drawLayout(ctx, L, x + 4, y + 2 + d, { color: PAL.ink, alpha });
+  return w;
+}
+
+/** Soft translucent pill behind text, so it reads over a busy skyline. */
+function drawBacking(ctx, cx, y, w, h, alpha = 0.55) {
+  const x = Math.round(cx - w / 2);
+  pixelRect(ctx, x, y, Math.round(w), h, `rgba(30,26,46,${alpha})`);
+}
+
+/** A line like 按 [空白鍵] 開始 — centred, with a key-cap in the middle. */
+function drawPrompt(ctx, before, key, after, cx, y, color, alpha = 1, pressed = false, backing = false) {
+  const gap = 4;
+  const w1 = zhWidth(before), w2 = layoutCJK(key).w + 8, w3 = zhWidth(after);
+  const total = w1 + w2 + w3 + gap * 2;
+  if (backing) drawBacking(ctx, cx, y - 6, total + 14, 24, 0.55 * alpha);
+  let x = Math.round(cx - total / 2);
+  drawZh(ctx, before, x, y, { color, alpha });
+  x += w1 + gap;
+  x += drawKeyCap(ctx, key, x, y - 3, alpha, pressed) + gap;
+  drawZh(ctx, after, x, y, { color, alpha });
+}
+
+/** Little sign with a name on it, pointing down at whoever it belongs to. */
+function drawNameTag(ctx, text, cx, bottom, accent, icon = null) {
+  const L = layoutCJK(text);
+  const iw = icon ? icon.w + 1 : 0;
+  const w = L.w + 6 + iw, h = L.h + 6;
+  const x = snap(cx - w / 2), y = snap(bottom - h - 2);
+  pixelRect(ctx, x, y, w, h, PAL.ink);
+  pixelRect(ctx, x + 1, y + 1, w - 2, h - 2, '#ffffff');
+  ctx.fillStyle = accent; ctx.fillRect(x + 1, y + h - 3, w - 2, 2);
+  ctx.fillStyle = PAL.ink;
+  const px = snap(cx);
+  ctx.fillRect(px - 1, y + h, 3, 1); ctx.fillRect(px, y + h + 1, 1, 1);
+  if (icon) ctx.drawImage(icon.canvas, x + 2, y + Math.round((h - icon.h) / 2) - 1);
+  drawLayout(ctx, L, x + 3 + iw, y + 2, { color: PAL.ink });
+}
+
+
+// ───────────────────────────── 4. SPRITES ─────────────────────────────
+const SPR = (() => {
+  const SKIN = { S: '#ffd8b5', s: '#ecb48f', R: '#ffa39e', K: PAL.ink, M: '#b5485a' };
+  const PLAYER_PAL = { ...SKIN, H: '#2e2a3d', h: '#5b5675', U: '#2f3d66', A: '#243052', a: '#1d2544', W: '#ffffff', T: '#d94a5c', P: '#283152', Q: '#1d243d', B: '#17141f' };
+  const PUMA_PAL = { ...SKIN, H: '#3a3446', h: '#5f587a', U: '#6b7184', A: '#575d70', a: '#4a4f60', W: '#ffffff', T: '#3d74d6', P: '#454a5a', Q: '#383c4b', B: '#17141f', G: '#4b4662', L: '#d9eeff' };
+  const WANG_PAL = { ...SKIN, H: '#2e2a3d', h: '#5b5675', C: '#a9d1f3', c: '#7fafdc', A: '#8cbbe5', a: '#7aa8d4', W: '#ffffff', P: '#3c4258', Q: '#30354a', B: '#17141f', G: PAL.ink, L: '#d9eeff', m: '#9a9aa8', k: '#3b3747' };
+
+  // Heads face right (obstacles are mirrored to face the player). 16 wide, 12 tall.
+  const PLAYER_HEAD = [          // neat side part, swept fringe, big friendly smile
+    '    HHHHHHHH',
+    '  HHHHHHHHHHHH',
+    ' HHHHHhhhHHHHHH',
+    ' HHHHHHHHhhHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHHSSSSSHH',
+    'HHHHHSSSSSSSSSSS',
+    'HHHsSSSSSKSSSKSS',
+    'HHHsSSSSSKSSSKSS',
+    ' HHSSSSSRSSSSSRS',
+    '  HSSSSSSSSMMSSS',
+    '   SSSSSSSSSSSS',
+  ];
+  const PUMA_HEAD = [            // short crop, rectangular glasses
+    '    HHHHHHH',
+    '  HHHHHHHHHHH',
+    ' HHHHHhhHHHHHH',
+    ' HHHHHHHHHHHHHH',
+    'HHHHHSSSSSSSSSSH',
+    'HHHHSSSSSSSSSSSS',
+    'HHHSSSSGGGGSGGGG',
+    'HHHsSSSGLKGGGLKG',
+    'HHHsSSSGLLGSGLLG',
+    ' HHSSSSSRSSSSSRS',
+    '  HSSSSSSSSMMSSS',
+    '   SSSSSSSSSSSS',
+  ];
+  const WANG_HEAD = [            // round face, round glasses
+    '    HHHHHHHH',
+    '  HHHHHHHHHHHH',
+    ' HHHHHHhhhHHHHH',
+    ' HHHHHHHHHHHHHHH',
+    'HHHHHHHSSSSSSSHH',
+    'HHHHSSSSSSSSSSSS',
+    'HHHSSSSGGGSSGGGS',
+    'HHHsSSGLKLGGLKLG',
+    'HHHsSSSGGGSSGGGS',
+    ' HHSSSSRSSSSSRSS',
+    '  HSSSSSSSMMMSSS',
+    '   SSSSSSSSSSSS',
+  ];
+  const SUIT_BODY = [
+    '    UUUWTWUUU',
+    '   UUUUWTWUUUU',
+    '   UUUUUTUUUUU',
+    '   UUUUUTUUUUU',
+    '   UUUUUUUUUUU',
+    '    PPPPPPPPP',
+  ];
+  const SHIRT_BODY = [
+    '    CCCWSWCCC',
+    '   CCCCCcCCCCC',
+    '   CCCCCCCCCCC',
+    '   CCCCCcCCCCC',
+    '   CCCCCCCCCCC',
+    '    PPPPPPPPP',
+  ];
+
+  // ── The rest of the cast: each gets a distinct hairstyle and outfit colour ──
+  const XIAOJUAN_HEAD = [        // top bun with a pink clip, swept bangs, lashes
+    ' HH  HHHHHHH',
+    'HHHHYHHHHHHHHH',
+    'HHHHHHHhhHHHHHH',
+    ' HHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHSSSHH',
+    'HHHHSSSSSSKSSSKS',
+    'HHHsSSSSSKSSSKSS',
+    'HHHsSSSSSKSSSKSS',
+    ' HHSSSSSRSSSSSRS',
+    '  HSSSSSSSSMMSSS',
+    '   SSSSSSSSSSSS',
+  ];
+  const JIAN_HEAD = [            // long straight hair, full blunt bangs
+    '    HHHHHHHH',
+    '  HHHHHHHHHHHH',
+    ' HHHHHHhhhHHHHH',
+    ' HHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHSSSSSSKSSSKH',
+    'HHHHSSSSSKSSSKSH',
+    'HHHHSSSSSKSSSKSH',
+    'HHHHSSSSRSSSSSRH',
+    'HHHHSSSSSSSMMSSH',
+    'HHHH SSSSSSSSSSH',
+  ];
+  const XU_HEAD = [              // chin-length bob, side-swept bangs, pearl earring
+    '    HHHHHHHH',
+    '  HHHHHHHHHHHH',
+    ' HHHhhHHHHHHHHH',
+    ' HHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHSSSSSHHH',
+    'HHHHHSSSSSKSSSKH',
+    'HHHHSSSSSKSSSKSH',
+    'HHHHSSSSSKSSSKSH',
+    'HHHHYSSSRSSSSSRH',
+    ' HHHSSSSSSSMMSSH',
+    '  HHSSSSSSSSSSH',
+  ];
+  const HE_HEAD = [              // fluffy textured hair with a cowlick
+    '   HHHHHHHHH  H',
+    '  HHHHHHHHHHHHH',
+    ' HHHHHHHHHHHHHHH',
+    'HHHHHhHHhHHhHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHSHHHSHHSHH',
+    'HHHHSSSSSSSSSSSS',
+    'HHHsSSSSSKSSSKSS',
+    'HHHsSSSSSKSSSKSS',
+    ' HHSSSSSRSSSSSRS',
+    '  HSSSSSSSMMMSSS',
+    '   SSSSSSSSSSSS',
+  ];
+  const BLAZER_SKIRT = [
+    '    UUUWWWUUU',
+    '   UUUUWWWUUUU',
+    '   UUUUUWUUUUU',
+    '   UUUUUUUUUUU',
+    '   UUUUUUUUUUU',
+    '   kkkkkkkkkkk',
+  ];
+  const JACKET_BODY = [
+    '    UUUWWWUUU',
+    '   UUUUWWWUUUU',
+    '   UUUUUWUUUUU',
+    '   UUUUUWUUUUU',
+    '   UUUUUUUUUUU',
+    '    PPPPPPPPP',
+  ];
+  const LONG_HAIR = [[0, 12, 'H'], [1, 12, 'H'], [2, 12, 'H'], [0, 13, 'H'], [1, 13, 'H'], [2, 13, 'H'], [0, 14, 'H'], [1, 14, 'H'], [1, 15, 'H'], [15, 12, 'H']];
+  const LADY = { ...SKIN, M: '#e0607a', h: '#6a5f82', Y: '#ff8fb1', W: '#ffffff', P: '#3a3446', Q: '#2e2a3a', B: '#2a2433' };
+  const XIAOJUAN_PAL = { ...LADY, H: '#4a3530', h: '#7a5a50', U: '#ff8a7a', A: '#ea7264', a: '#d86456', k: '#e06a5c' };
+  const JIAN_PAL = { ...LADY, H: '#2e2a3d', U: '#4fb8a8', A: '#3fa294', a: '#348a7e', k: '#2f7f74' };
+  const XU_PAL = { ...LADY, H: '#3b2f45', Y: '#fff6e8', U: '#9a72d6', A: '#8662c2', a: '#7353ad', k: '#6a4ca0' };
+  const HE_PAL = { ...SKIN, H: '#3a2e2a', h: '#6a5548', U: '#3f8f6b', A: '#347a5a', a: '#2c684d', W: '#ffffff', P: '#3c4258', Q: '#30354a', B: '#17141f' };
+
+  // Limb poses: [dx, dy, char?] relative to the shoulder; legs = x-offsets per row (last row = shoe).
+  const ARMS = {
+    down: [[0, 0], [0, 1], [0, 2, 'S']],
+    fwd:  [[0, 0], [1, 1], [2, 2, 'S']],
+    back: [[0, 0], [-1, 1], [-2, 2, 'S']],
+    up:   [[0, 0], [1, -1], [1, -2, 'S']],
+    wave: [[0, 0], [1, -1], [2, -2], [2, -3, 'S'], [3, -4, 'S']],
+  };
+  const LEGS = {
+    down:    [[0, 1], [0, 1], [0, 1], [0, 1, 2]],
+    forward: [[0, 1], [1, 2], [1, 2], [2, 3, 4]],
+    back:    [[0, 1], [-1, 0], [-2, -1], [-3, -2, -1]],
+    up:      [[0, 1], [1, 2], [1, 2, 3]],
+  };
+
+  /** Assemble a chibi from head + body + procedurally posed limbs. */
+  function chibi({ head, body, width = 19, legX = [5, 9], shoulder = [2, 14], legF = 'down', legB = 'down', armF = 'down', armB = 'down', bob = 0, extras = [] }) {
+    const top = head.concat(body);
+    const legRow = top.length, H = legRow + 4;
+    const grid = Array.from({ length: H }, () => Array(width).fill(' '));
+    const set = (x, y, ch, onlyEmpty) => {
+      if (x < 0 || x >= width || y < 0 || y >= H) return;
+      if (!onlyEmpty || grid[y][x] === ' ') grid[y][x] = ch;
+    };
+    const sy = head.length + 1 + bob;
+    const arm = (pose, x0, ch) => ARMS[pose].forEach(([dx, dy, c]) => set(x0 + dx, sy + dy, c || ch));
+    const leg = (pose, x0, pants, onlyEmpty) => {
+      const rows = LEGS[pose];
+      rows.forEach((xs, dy) => xs.forEach((dx) => set(x0 + dx, legRow + dy, dy === rows.length - 1 ? 'B' : pants, onlyEmpty)));
+    };
+    arm(armB, shoulder[0], 'a');                       // far arm sits behind the body
+    top.forEach((row, y) => [...row].forEach((ch, x) => { if (ch !== ' ') set(x, y + bob, ch); }));
+    leg(legB, legX[0], 'Q', true);
+    leg(legF, legX[1], 'P', false);
+    arm(armF, shoulder[1], 'A');
+    extras.forEach(([x, y, ch]) => set(x, y + bob, ch));
+    return grid.map((r) => r.join(''));
+  }
+
+  function blink(rows) {
+    const r = rows.map((x) => [...x]);
+    const eyeRows = r.map((x, i) => (x.includes('K') ? i : -1)).filter((i) => i >= 0);
+    r[eyeRows[0]] = r[eyeRows[0]].map((c) => (c === 'K' ? 'S' : c));
+    return r.map((x) => x.join(''));
+  }
+
+  // ── Player ──
+  const RUN_CYCLE = [
+    { legF: 'forward', legB: 'back', armF: 'back', armB: 'fwd', bob: 1 },
+    { legF: 'down', legB: 'up', armF: 'down', armB: 'down', bob: 0 },
+    { legF: 'back', legB: 'forward', armF: 'fwd', armB: 'back', bob: 1 },
+    { legF: 'up', legB: 'down', armF: 'down', armB: 'down', bob: 0 },
+  ];
+  const P = (rows) => makeSprite(rows, PLAYER_PAL);
+  const both = (head, poses, extra = {}) => ({
+    open: poses.map((p) => P(chibi({ head, body: SUIT_BODY, ...extra, ...p }))),
+    closed: poses.map((p) => P(chibi({ head: blink(head), body: SUIT_BODY, ...extra, ...p }))),
+  });
+  const run = both(PLAYER_HEAD, RUN_CYCLE);
+  const stand = both(PLAYER_HEAD, [{}, { armF: 'wave' }]);      // waves hello on the title screen
+  const jump = both(PLAYER_HEAD, [{ legF: 'forward', legB: 'up', armF: 'up', armB: 'back' }]);
+
+  const dead = (() => {
+    const h = PLAYER_HEAD.map((r) => [...r.padEnd(16)]);
+    [9, 13].forEach((cx) => {
+      h[7][cx] = 'S'; h[8][cx] = 'S';
+      [[6, cx - 1], [6, cx + 1], [7, cx], [8, cx - 1], [8, cx + 1]].forEach(([y, x]) => { h[y][x] = 'K'; });
+    });
+    h[11][11] = 'M'; h[11][12] = 'M';                                   // surprised "o" mouth
+    const head = ['        R', '       SRS'].concat(h.map((r) => r.join('')));  // the bonk bump
+    return P(chibi({ head, body: SUIT_BODY, armF: 'up', armB: 'back' }));
+  })();
+
+  // Crouch: head tucked low, knees bent — 13px tall, low enough to slip under 洋流.
+  const duckHead = [1, 2, 4, 5, 6, 7, 8, 9, 10, 11].map((i, k) => (k >= 5 ? ' UU' : '   ') + PLAYER_HEAD[i]);
+  const DUCK = [
+    duckHead.concat([' UUUUUUUUWTWUUU', 'UUUUUUUUUUUUUUAAS', ' BBB PP     PP BBB']),
+    duckHead.concat([' UUUUUUUUWTWUUU', 'UUUUUUUUUUUUUUAAS', '  BBBPP    PPBBB']),
+  ];
+  const duck = { open: DUCK.map(P), closed: DUCK.map((r) => P(blink(r))) };
+
+  // ── Obstacles (mirrored: they face the player) ──
+  const person = (pal, opts) => makeSprite(mirror(chibi(opts)), pal);
+  const puma = [
+    person(PUMA_PAL, { head: PUMA_HEAD, body: SUIT_BODY, armF: 'wave' }),
+    person(PUMA_PAL, { head: PUMA_HEAD, body: SUIT_BODY, armF: 'up' }),
+  ];
+  const MIC_AT_MOUTH = [[15, 10, 'm'], [15, 9, 'k'], [16, 9, 'k'], [15, 8, 'k'], [16, 8, 'k']];
+  const MIC_OUT = [[17, 14, 'm'], [17, 13, 'k'], [18, 13, 'k'], [17, 12, 'k'], [18, 12, 'k']];
+  const wang = [
+    person(WANG_PAL, { head: WANG_HEAD, body: SHIRT_BODY, armF: 'up', extras: MIC_AT_MOUTH }),
+    person(WANG_PAL, { head: WANG_HEAD, body: SHIRT_BODY, armF: 'fwd', extras: MIC_OUT }),
+  ];
+
+  const xiaojuan = [
+    person(XIAOJUAN_PAL, { head: XIAOJUAN_HEAD, body: BLAZER_SKIRT, armF: 'wave' }),
+    person(XIAOJUAN_PAL, { head: XIAOJUAN_HEAD, body: BLAZER_SKIRT, armF: 'up' }),
+  ];
+  const jian = [
+    person(JIAN_PAL, { head: JIAN_HEAD, body: BLAZER_SKIRT, armF: 'fwd', extras: LONG_HAIR }),
+    person(JIAN_PAL, { head: JIAN_HEAD, body: BLAZER_SKIRT, armF: 'down', extras: LONG_HAIR }),
+  ];
+  const he = [
+    person(HE_PAL, { head: HE_HEAD, body: JACKET_BODY, armF: 'up', armB: 'back' }),
+    person(HE_PAL, { head: HE_HEAD, body: JACKET_BODY, armF: 'fwd', armB: 'down' }),
+  ];
+  const xu = [
+    person(XU_PAL, { head: XU_HEAD, body: BLAZER_SKIRT, armF: 'wave' }),
+    person(XU_PAL, { head: XU_HEAD, body: BLAZER_SKIRT, armF: 'down' }),
+  ];
+  // Tiny squid for the 小卷 tag (a little pun).
+  const squid = makeSprite(['  P', ' PPP', 'PPPPP', 'PKPKP', 'PPPPP', 'P P P'], { P: '#ff9ab8', K: PAL.ink }, null);
+
+  // 來辯論阿: a flying speech bubble built around real text.
+  const bubble = (() => {
+    const L = layoutCJK(BUBBLE_TEXT, 12, 'bold');
+    const w = L.w + 8, h = L.h + 6;
+    const g = Array.from({ length: h + 3 }, () => Array(w).fill(' '));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y][x] = y >= h - 2 ? 'S' : 'W';
+    [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]].forEach(([x, y]) => { g[y][x] = ' '; });
+    [[6, 7, 8], [6, 7], [6]].forEach((xs, i) => xs.forEach((x) => { g[h + i][x] = 'S'; }));
+    const spr = makeSprite(g.map((r) => r.join('')), { W: '#ffffff', S: '#e4def0' });
+    spr.label = { L, x: 5, y: 4, color: '#c2364a' };   // +1 for the sprite's outline pad
+    return spr;
+  })();
+
+  // 洋流: a curling wave whose stripes roll forward (4 frames).
+  const WAVE_PAL = { F: '#ffffff', L: '#a6e0ff', B: '#4aa3f0', D: '#2b6fd0' };
+  const WAVE_SHAPE = [          // a breaking wave: the lip curls forward over an open barrel
+    '      #######',
+    '    ###########',
+    '   ####    ######',
+    '  ###        #####',
+    ' ###          ######',
+    ' ##            #######',
+    ' #             ########',
+    '              ##########',
+    '   #####################',
+    '  #######################',
+    '    ##################',
+  ];
+  const wave = [0, 1, 2, 3].map((p) => makeSprite(WAVE_SHAPE.map((row, y) => [...row].map((ch, x) => {
+    if (ch !== '#') return ' ';
+    const above = y > 0 && WAVE_SHAPE[y - 1][x] === '#';
+    if (!above) return (x + p * 2) % 9 === 0 ? 'L' : 'F';
+    if ((x + y + p * 2) % 8 < 2) return 'L';
+    return y >= 7 ? 'D' : 'B';
+  }).join('')), WAVE_PAL));
+
+  // ── Decoration ──
+  const CLOUD_PAL = { W: '#ffffff', S: '#dbe9f6' };
+  const clouds = [
+    makeSprite(['         WWWW', '       WWWWWWWW', '   WWWWWWWWWWWWW', ' WWWWWWWWWWWWWWWWWWW', 'WWWWWWWWWWWWWWWWWWWWWW', ' SSSSSSSSSSSSSSSSSSSS'], CLOUD_PAL, null),
+    makeSprite(['      WWWWW', '    WWWWWWWWW    WWW', '  WWWWWWWWWWWWWWWWWWWW', 'WWWWWWWWWWWWWWWWWWWWWWWWW', ' SSSSSSSSSSSSSSSSSSSSSSS'], CLOUD_PAL, null),
+    makeSprite(['    WWWW', '  WWWWWWWW', 'WWWWWWWWWWWWW', ' SSSSSSSSSSS'], CLOUD_PAL, null),
+  ];
+  const dizzy = makeSprite(['  Y', ' YYY', 'YYyYY', ' YYY', ' Y Y'], { Y: PAL.star, y: '#fff6c4' });
+
+  const SCOOTER = [
+    '    hhh',
+    '   hhhhh',
+    '    hSS',
+    '    JJJ    X',
+    '   JJJJJJJXX',
+    '   PPP   XX',
+    ' MMMMMMMMMMM',
+    'MMMMMMMMMMMMY',
+    ' KK      KK',
+  ];
+  const scooters = [
+    ['#e05a5a', '#ffd84a', '#5b7bd6'], ['#f4f1ea', '#ff8fb1', '#3f9a6b'], ['#4a86e8', '#ffffff', '#d9644a'], ['#ffcf4a', '#2e2a3d', '#7a5cc9'],
+  ].map(([body, helmet, jacket]) => makeSprite(SCOOTER, { h: helmet, S: '#ffd8b5', J: jacket, P: '#3c4258', X: '#55505f', M: body, Y: '#fff1a8', K: '#2a2433' }));
+
+  function disc(r, inside) {
+    const size = r * 2 + 1;
+    const [c, g] = makeCanvas(size, size);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const dx = x - r, dy = y - r;
+      if (dx * dx + dy * dy <= r * r + r * 0.8) { const col = inside(dx, dy); if (col) { g.fillStyle = col; g.fillRect(x, y, 1, 1); } }
+    }
+    return c;
+  }
+  const sun = disc(9, (dx, dy) => (dx * dx + dy * dy < 30 && dx + dy < 0 ? '#fff6c8' : dx + dy > 9 ? '#ffc94a' : '#ffe27a'));
+  const CRATERS = [[-3, -2], [-2, -2], [2, 3], [3, 3], [2, 2], [-1, 4], [4, -3]];
+  const moon = [-4, -8, -11, null, 11, 8, 4].map((off) => disc(7, (dx, dy) => {
+    if (off !== null) { const sx = dx - off; if (sx * sx + dy * dy <= 7 * 7 + 5) return null; }
+    return CRATERS.some(([cx, cy]) => cx === dx && cy === dy) ? '#d9d1a9' : '#f7f1d4';
+  }));
+
+  return { run, stand, jump, dead, duck, puma, wang, xiaojuan, jian, he, xu, squid, bubble, wave, clouds, dizzy, scooters, sun, moon,
+    parts: { PLAYER_HEAD, PUMA_HEAD, WANG_HEAD, JIAN_HEAD, XU_HEAD, HE_HEAD, XIAOJUAN_HEAD, SUIT_BODY, SHIRT_BODY, BLAZER_SKIRT, JACKET_BODY,
+      PLAYER_PAL, PUMA_PAL, WANG_PAL, JIAN_PAL, XU_PAL, HE_PAL, XIAOJUAN_PAL, chibi } };
+})();
+
+
+// ─────────────────────────── 4b. MAZE SPRITES ───────────────────────────
+const MX = (() => {
+  const P = SPR.parts;
+  const eyesClosed = (head) => head.map((r, i) => (i === 7 ? r.replace(/K/g, 'S') : r));
+  const koHead = (head) => {
+    const h = head.map((r) => [...r.padEnd(16)]);
+    [9, 13].forEach((cx) => {
+      h[7][cx] = 'S'; h[8][cx] = 'S';
+      [[6, cx - 1], [6, cx + 1], [7, cx], [8, cx - 1], [8, cx + 1]].forEach(([y, x]) => { h[y][x] = 'K'; });
+    });
+    h[11][11] = 'M'; h[11][12] = 'M';
+    return h.map((r) => r.join(''));
+  };
+  // nervous: a sweat drop at the temple and a wobbly mouth
+  const sweatHead = (head) => {
+    const h = head.map((r) => [...r.padEnd(16)]);
+    h[5][15] = 'D'; h[6][15] = 'D'; h[7][15] = 'D'; h[6][14] = 'D';
+    h[10][11] = 'M'; h[10][12] = 'S'; h[10][13] = 'M';
+    return h.map((r) => r.join(''));
+  };
+  const both = (rows, pal) => ({ r: makeSprite(rows, pal), l: makeSprite(mirror(rows), pal) });
+
+  // ── 萬安: walks with a flashlight held out in front ──
+  const PPAL = { ...P.PLAYER_PAL, F: '#6a6585', Y: '#fff3a0', D: '#8fd3ff' };
+  const TORCH = [[17, 14, 'F'], [17, 15, 'F'], [18, 15, 'Y'], [18, 14, 'Y']];
+  const WALK = [
+    { legF: 'forward', legB: 'back', armB: 'fwd', bob: 1 },
+    { legF: 'down', legB: 'down', armB: 'down', bob: 0 },
+    { legF: 'back', legB: 'forward', armB: 'back', bob: 1 },
+    { legF: 'down', legB: 'down', armB: 'down', bob: 0 },
+  ];
+  const pl = (head, pose) => both(P.chibi({ head, body: P.SUIT_BODY, armF: 'fwd', extras: TORCH, ...pose }), PPAL);
+  const player = {
+    walk: WALK.map((w) => pl(P.PLAYER_HEAD, w)),
+    blink: pl(eyesClosed(P.PLAYER_HEAD), WALK[1]),
+    sweat: WALK.map((w) => pl(sweatHead(P.PLAYER_HEAD), w)),
+    ko: both(P.chibi({ head: koHead(P.PLAYER_HEAD), body: P.SUIT_BODY, armF: 'up', armB: 'up' }), PPAL),
+  };
+  // big sweaty face for the 當場被問倒 popup
+  const faceSweat = makeSprite(sweatHead(P.PLAYER_HEAD).concat(P.SUIT_BODY.slice(0, 3)), PPAL);
+
+  // ── The councillors (and 沈伯洋, the tough one): wander, chase with arms up, dizzy, argue ──
+  const LONG = [[0, 12, 'H'], [1, 12, 'H'], [2, 12, 'H'], [0, 13, 'H'], [1, 13, 'H'], [2, 13, 'H'], [0, 14, 'H'], [1, 14, 'H'], [15, 12, 'H']];
+  const MIC = [[15, 10, 'm'], [15, 9, 'k'], [16, 9, 'k'], [15, 8, 'k'], [16, 8, 'k']];
+  const KINDS = {
+    wang: { head: P.WANG_HEAD, body: P.SHIRT_BODY, pal: P.WANG_PAL, extras: MIC },
+    jian: { head: P.JIAN_HEAD, body: P.BLAZER_SKIRT, pal: P.JIAN_PAL, extras: LONG },
+    he:   { head: P.HE_HEAD, body: P.JACKET_BODY, pal: P.HE_PAL, extras: [] },
+    xu:   { head: P.XU_HEAD, body: P.BLAZER_SKIRT, pal: P.XU_PAL, extras: [] },
+    boss: { head: P.PUMA_HEAD, body: P.SUIT_BODY, pal: { ...P.PUMA_PAL, m: '#d0cde0', k: '#3b3747', T: '#d8343f' }, extras: MIC },
+  };
+  const chars = {};
+  for (const k in KINDS) {
+    const { head, body, pal, extras } = KINDS[k];
+    const ch = (opts, hd = head) => both(P.chibi({ head: hd, body, extras, ...opts }), pal);
+    const armUp = extras === MIC ? 'up' : 'wave';
+    chars[k] = {
+      walk: [ch({ legF: 'forward', legB: 'back', armB: 'fwd', bob: 1 }), ch({}), ch({ legF: 'back', legB: 'forward', armB: 'back', bob: 1 }), ch({})],
+      chase: [ch({ legF: 'forward', legB: 'back', armF: armUp, armB: 'back', bob: 1 }), ch({ legF: 'back', legB: 'forward', armF: 'up', armB: 'fwd' })],
+      dizzy: ch({ armF: 'up', armB: 'up' }, koHead(head)),
+      argue: [ch({ armF: 'fwd', armB: 'down' }), ch({ armF: 'up', armB: 'down' })],
+      blink: ch({}, eyesClosed(head)),
+    };
+  }
+  // 局長: a generic, neat city official with a folder — jumps in to answer for 萬安
+  const CHIEF_HEAD = P.PUMA_HEAD;
+  const CHIEF_PAL = { ...P.PUMA_PAL, H: '#8d8a9c', h: '#b4b1c2', U: '#2c3550', A: '#253048', a: '#1d2640', T: '#e8b04a', P: '#2a3046', Q: '#222838', O: '#4a86e8', o: '#2f63b8' };
+  const FOLDER = [[17, 13, 'O'], [18, 13, 'O'], [17, 14, 'o'], [18, 14, 'O'], [17, 15, 'O'], [18, 15, 'o']];
+  const chief = [both(P.chibi({ head: CHIEF_HEAD, body: P.SUIT_BODY, armF: 'fwd', extras: FOLDER, legF: 'forward', legB: 'back', bob: 1 }), CHIEF_PAL),
+    both(P.chibi({ head: CHIEF_HEAD, body: P.SUIT_BODY, armF: 'wave', extras: [] }), CHIEF_PAL)];
+
+  // ── Items ──
+  const SQUID_ROWS = ['   pp', '  pPPp', ' pPPPPp', ' PPPPPP', ' PKPPKP', ' PPPPPP', ' PpPPpP', 'P P  P P', 'P  PP  P'];
+  const SQ_PAL = { P: '#ff9ab8', p: '#ffc4d6', K: PAL.ink };
+  const rot = (rows) => { const w = Math.max(...rows.map((r) => r.length)); const p = rows.map((r) => r.padEnd(w)); return Array.from({ length: w }, (_, x) => p.map((r) => r[x]).reverse().join('')); };
+  const squid = makeSprite(SQUID_ROWS, SQ_PAL);
+  const squidSpin = []; for (let i = 0, r = SQUID_ROWS; i < 4; i++, r = rot(r)) squidSpin.push(makeSprite(r, SQ_PAL));
+  const BERRY_PAL = { B: '#5a62d6', b: '#8a93f0', W: '#eef0ff', d: '#3a3f9e', k: '#2e3270', g: '#4f8f5a' };
+  const bigBerry = makeSprite(['   k k k', '    kkk', '  BBBBBBB', ' BBbBBBBBB', 'BBbWBBBBBBB', 'BBbBBBBBBBB', 'BBBBBBBBBBB', 'BBBBBBBBBdB', ' BBBBBBBdB', '  BBBBBdB', '    BBB'], BERRY_PAL);
+  // 特級大果藍莓: a plump berry with a gold rim — the shiny collectible
+  const goldBerry = makeSprite(['  k k k', '   kkk', ' BBBBBBB', 'BbWBBBBBB', 'BbBBBBBBB', 'BBBBBBBdB', 'BBBBBBdBB', ' BBBBBBB', '   BBB'], BERRY_PAL, '#f2c14e');
+  const BOTTLE_PAL = { c: '#d8344a', C: '#ff7a8a', W: '#ffffff', h: '#cfe6fb', b: '#3c7fd9', w: '#ffffff' };
+  const milk = makeSprite(['  cc', ' cCCc', '  WW', ' WWWh', 'WWWWWh', 'bbbbbb', 'bwbwbb', 'bbbbbb', 'WWWWWh', 'WWWWWh', ' WWWh'], BOTTLE_PAL);
+  const milkGrey = makeSprite(['  cc', ' cCCc', '  WW', ' WWWh', 'WWWWWh', 'bbbbbb', 'bwbwbb', 'bbbbbb', 'WWWWWh', 'WWWWWh', ' WWWh'], { c: '#8d879a', C: '#aaa4b6', W: '#d9d6e2', h: '#c4c0d0', b: '#8d879a', w: '#d9d6e2' });
+  // 首長救駕: the red hotline phone
+  const phone = makeSprite([' RRRRRRRR', 'RRrrrrrrRR', 'RR      RR', '  RRRRRR', ' RRWWWWRR', 'RRWKWKWWRR', 'RRWWKWKWRR', 'RRRRRRRRRR'], { R: '#e0474f', r: '#ff8a8a', W: '#fff3e6', K: PAL.ink });
+  // critters
+  const RAT_PAL = { g: '#9a96aa', G: '#7d7990', p: '#ffb0b8', K: PAL.ink, t: '#c9939b' };
+  const rat = [both(['       gg', '  ggggggKg', 'tgggggGgggp', 't GGGGGGgg', '   p   p'], RAT_PAL),
+    both(['       gg', '  ggggggKg', ' gggggGgggp', 'tt GGGGGgg', '  p   p'], RAT_PAL)];
+  const ROACH_PAL = { b: '#7a4a2a', B: '#a8683a', k: '#3a2418' };
+  const roach = [both([' k   k', '  bbbk', 'bBBBbb', ' bBbb', 'k k k'], ROACH_PAL), both(['k   k', '  bbbk', 'bBBBbb', ' bBbb', ' k k k'], ROACH_PAL)];
+  const heart = makeSprite([' RR RR', 'RRRRRRR', 'RRRRRRR', ' RRRRR', '  RRR', '   R'], { R: '#ff5a6e' });
+  const heartEmpty = makeSprite([' RR RR', 'RRRRRRR', 'RRRRRRR', ' RRRRR', '  RRR', '   R'], { R: '#4a4566' });
+
+  // ── Speech bubbles: pixel balloon, vector-crisp text ──
+  const bubbles = new Map();
+  function bubble(text, color = '#c2364a') {
+    const key = text + color;
+    if (bubbles.has(key)) return bubbles.get(key);
+    const L = layoutCJK(text, 12, 'bold');
+    const w = L.w + 8, h = L.h + 6;
+    const g = Array.from({ length: h + 3 }, () => Array(w).fill(' '));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y][x] = y >= h - 2 ? 'S' : 'W';
+    [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]].forEach(([x, y]) => { g[y][x] = ' '; });
+    const tx = Math.floor(w / 2) - 1;
+    [[tx - 1, tx, tx + 1], [tx, tx + 1], [tx]].forEach((xs, i) => xs.forEach((x) => { g[h + i][x] = 'S'; }));
+    const spr = makeSprite(g.map((r) => r.join('')), { W: '#ffffff', S: '#e4def0' });
+    spr.label = { L, x: 5, y: 4, color };
+    bubbles.set(key, spr);
+    return spr;
+  }
+
+  // ── 敗選 stamp (rotated 1-bit raster, speckled like real ink) ──
+  function makeStamp(text, color, angle) {
+    const L = rasterCJK(text, 30, 'bold');
+    const bw = L.w + 16, bh = L.h + 14;
+    const [c, g] = makeCanvas(bw, bh);
+    g.fillStyle = color;
+    g.fillRect(1, 0, bw - 2, 2); g.fillRect(1, bh - 2, bw - 2, 2); g.fillRect(0, 1, 2, bh - 2); g.fillRect(bw - 2, 1, 2, bh - 2);
+    g.fillRect(4, 4, bw - 8, 1); g.fillRect(4, bh - 5, bw - 8, 1); g.fillRect(4, 4, 1, bh - 8); g.fillRect(bw - 5, 4, 1, bh - 8);
+    const ox = Math.round((bw - L.w) / 2) - 1, oy = Math.round((bh - L.h) / 2) - 1;
+    for (const [rx, ry, len] of L.fill) g.fillRect(ox + rx, oy + ry, len, 1);
+    const img = g.getImageData(0, 0, bw, bh), d = img.data;
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const hh = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+      if (hh - Math.floor(hh) < 0.06) d[(y * bw + x) * 4 + 3] = 0;
+    }
+    g.putImageData(img, 0, 0);
+    const cs = Math.cos(angle), sn = Math.sin(angle);
+    const w = Math.ceil(Math.abs(bw * cs) + Math.abs(bh * sn)) + 2, h = Math.ceil(Math.abs(bw * sn) + Math.abs(bh * cs)) + 2;
+    const [rc, rg] = makeCanvas(w, h), out = rg.createImageData(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const dx = x + 0.5 - w / 2, dy = y + 0.5 - h / 2;
+      const u = Math.floor(dx * cs + dy * sn + bw / 2), v = Math.floor(-dx * sn + dy * cs + bh / 2);
+      if (u < 0 || v < 0 || u >= bw || v >= bh) continue;
+      for (let k = 0; k < 4; k++) out.data[(y * w + x) * 4 + k] = d[(v * bw + u) * 4 + k];
+    }
+    rg.putImageData(out, 0, 0);
+    return { canvas: rc, w, h };
+  }
+  const stamp = makeStamp('敗選', '#d8343f', -0.16);
+
+  // ── Outlines for chasers lurking in the dim: the sprite's 1px rim in a single colour ──
+  const rims = new Map();
+  function rim(s, color) {
+    const key = color;
+    let m = rims.get(s.canvas); if (!m) { m = {}; rims.set(s.canvas, m); }
+    if (m[key]) return m[key];
+    const w = s.w + 2, h = s.h + 2;
+    const [c, g] = makeCanvas(w, h);
+    const src = s.canvas.getContext('2d').getImageData(0, 0, s.w, s.h).data;
+    const on = (x, y) => x >= 0 && y >= 0 && x < s.w && y < s.h && src[(y * s.w + x) * 4 + 3] > 0;
+    g.fillStyle = color;
+    for (let y = -1; y <= s.h; y++) for (let x = -1; x <= s.w; x++) {
+      if (on(x, y)) continue;
+      if (on(x - 1, y) || on(x + 1, y) || on(x, y - 1) || on(x, y + 1)) g.fillRect(x + 1, y + 1, 1, 1);
+    }
+    m[key] = { canvas: c, w, h };
+    return m[key];
+  }
+
+  return { player, faceSweat, chars, chief, squid, squidSpin, bigBerry, goldBerry, milk, milkGrey, phone, rat, roach, heart, heartEmpty, bubble, stamp, rim };
+})();
+
+// ─────────────────────── 5. MAZE GENERATION + TILE ART ───────────────────────
+const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+/** Breadth-first distance field over walkable tiles from one or more source tiles (-1 = unreachable). */
+function bfs(lv, sources) {
+  const { w, h, t } = lv, dist = new Int16Array(w * h).fill(-1), q = new Int32Array(w * h);
+  let head = 0, tail = 0;
+  for (const i of sources) if (!solidT(t[i]) && dist[i] < 0) { dist[i] = 0; q[tail++] = i; }
+  while (head < tail) {
+    const i = q[head++], x = i % w, y = (i / w) | 0, d = dist[i] + 1;
+    for (const [dx, dy] of DIRS4) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const j = ny * w + nx;
+      if (dist[j] < 0 && !solidT(t[j])) { dist[j] = d; q[tail++] = j; }
+    }
+  }
+  return dist;
+}
+
+/**
+ * Taipei-alley maze: a recursive-backtracker maze, braided (most dead ends knocked through so there
+ * are loops to escape along), a few little plazas, and street trees standing in some of the gaps.
+ */
+function genLevel(n, seed) {
+  const rng = mulberry32(seed), ri = (a, b) => a + Math.floor(rng() * (b - a + 1));
+  const cw = Math.min(13 + 2 * (n - 1), 29), ch = Math.min(9 + (n - 1), 19);
+  const w = cw * 2 + 1, h = ch * 2 + 1;
+  const t = new Uint8Array(w * h).fill(T_WALL);
+  const I = (x, y) => y * w + x;
+  const inCells = (cx, cy) => cx >= 0 && cy >= 0 && cx < cw && cy < ch;
+  // 1. perfect maze
+  const vis = new Uint8Array(cw * ch);
+  const s0 = [ri(0, cw - 1), ri(0, ch - 1)];
+  const stack = [s0]; vis[s0[1] * cw + s0[0]] = 1; t[I(s0[0] * 2 + 1, s0[1] * 2 + 1)] = T_FLOOR;
+  while (stack.length) {
+    const [cx, cy] = stack[stack.length - 1];
+    const nb = DIRS4.filter(([dx, dy]) => inCells(cx + dx, cy + dy) && !vis[(cy + dy) * cw + cx + dx]);
+    if (!nb.length) { stack.pop(); continue; }
+    const [dx, dy] = nb[Math.floor(rng() * nb.length)];
+    vis[(cy + dy) * cw + cx + dx] = 1;
+    t[I(cx * 2 + 1 + dx, cy * 2 + 1 + dy)] = T_FLOOR;
+    t[I((cx + dx) * 2 + 1, (cy + dy) * 2 + 1)] = T_FLOOR;
+    stack.push([cx + dx, cy + dy]);
+  }
+  // 2. braid: knock most dead ends through
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
+    const openN = DIRS4.filter(([dx, dy]) => t[I(cx * 2 + 1 + dx, cy * 2 + 1 + dy)] === T_FLOOR).length;
+    if (openN !== 1 || rng() > 0.6) continue;
+    const opts = DIRS4.filter(([dx, dy]) => inCells(cx + dx, cy + dy) && t[I(cx * 2 + 1 + dx, cy * 2 + 1 + dy)] === T_WALL);
+    if (opts.length) { const [dx, dy] = opts[Math.floor(rng() * opts.length)]; t[I(cx * 2 + 1 + dx, cy * 2 + 1 + dy)] = T_FLOOR; }
+  }
+  // 3. small plazas (3×3)
+  for (let k = 0, m = Math.min(1 + (n >> 1), 4); k < m; k++) {
+    const cx = ri(1, cw - 2), cy = ri(1, ch - 2);
+    for (let y = cy * 2; y <= cy * 2 + 2; y++) for (let x = cx * 2; x <= cx * 2 + 2; x++) t[I(x, y)] = T_FLOOR;
+  }
+  // 4. street trees in some of the one-tile gaps between corridors (cutting one opens a shortcut)
+  const cand = [];
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    if (t[I(x, y)] !== T_WALL) continue;
+    const L = t[I(x - 1, y)] === T_FLOOR, R = t[I(x + 1, y)] === T_FLOOR, U = t[I(x, y - 1)] === T_FLOOR, D = t[I(x, y + 1)] === T_FLOOR;
+    if ((L && R && !U && !D) || (U && D && !L && !R)) cand.push(I(x, y));
+  }
+  shuffle(cand, rng);
+  cand.slice(0, Math.max(12, Math.round(cand.length * 0.24))).forEach((i) => { t[i] = T_TREE; });
+
+  const lv = { n, w, h, t, seed, ...levelInfo(n) };
+  // start in a corner; the 連任 door goes to the farthest reachable tile
+  const corners = [[1, 1], [w - 2, 1], [1, h - 2], [w - 2, h - 2]];
+  const [stx, sty] = corners[ri(0, 3)];
+  lv.start = { x: stx, y: sty };
+  lv.distStart = bfs(lv, [I(stx, sty)]);
+  let best = -1, bi = 0;
+  lv.distStart.forEach((d, i) => { if (d > best) { best = d; bi = i; } });
+  lv.exit = { x: bi % w, y: (bi / w) | 0 };
+  // floors, dead ends, junction lamps
+  lv.floors = []; lv.deadEnds = [];
+  const deg = (i) => { const x = i % w, y = (i / w) | 0; return DIRS4.filter(([dx, dy]) => !solidT(t[I(x + dx, y + dy)])).length; };
+  for (let i = 0; i < w * h; i++) if (!solidT(t[i]) && lv.distStart[i] >= 0) { lv.floors.push(i); if (deg(i) === 1) lv.deadEnds.push(i); }
+  lv.lamps = [];
+  for (const i of shuffle(lv.floors.filter((i) => deg(i) >= 3), rng)) {
+    const x = i % w, y = (i / w) | 0;
+    if (lv.lamps.length >= lv.floors.length / 38) break;
+    if (lv.lamps.every((l) => Math.abs(l.x - x) + Math.abs(l.y - y) >= 7)) lv.lamps.push({ x, y, ph: rng() * 6 });
+  }
+  return lv;
+}
+
+const THEMES = {
+  alley: {
+    floor: '#8e8da0', floor2: '#9897aa', speck: '#7f7e93', line: '#dcd6c0',
+    roof: '#d3cab6', roof2: '#c2b8a2', roofHi: '#e6dfcf', edge: '#9e947e', tin: '#93a8c6', tin2: '#7f95b4',
+    tints: ['#d3cab6', '#d6cfc2', '#cdd3d6', '#dccbbd', '#c9d0c0'],
+    face: '#ebdfc8', face2: '#cdbd9f', eave: '#6e6578', win: '#3f5d8e', winLit: '#ffd97a', grille: '#5a5466',
+  },
+  council: {
+    floor: '#a24e59', floor2: '#ad5964', speck: '#924450', line: '#e0b95e',
+    roof: '#ddd2bd', roof2: '#cec2a8', roofHi: '#efe8da', edge: '#b39b6a', tin: '#c9b98f', tin2: '#b6a57a',
+    face: '#8f5f3f', face2: '#764b30', eave: '#4e3222', win: '#efe0b0', winLit: '#fff4c8', grille: '#d0a84e',
+  },
+  old: {
+    floor: '#b2735f', floor2: '#bc7d69', speck: '#9c6452', line: '#e8cfaa',
+    roof: '#c96d4c', roof2: '#b25c40', roofHi: '#de8a66', edge: '#8a4430', tin: '#c96d4c', tin2: '#a9553a',
+    face: '#e6d5b6', face2: '#cfba96', eave: '#5e3e2c', win: '#5b4a3a', winLit: '#ffcf7a', grille: '#6a5040',
+  },
+};
+
+function discPx(g, cx, cy, r, colorAt) {
+  for (let y = -r - 1; y <= r + 1; y++) for (let x = -r - 1; x <= r + 1; x++) {
+    const d2 = x * x + y * y;
+    if (d2 <= r * r + r * 0.8) { const c = colorAt(x, y); if (c) { g.fillStyle = c; g.fillRect(cx + x, cy + y, 1, 1); } }
+    else if (d2 <= (r + 1) * (r + 1) + r) { g.fillStyle = PAL.ink; g.fillRect(cx + x, cy + y, 1, 1); }
+  }
+}
+
+/** One 20×20 tile, painted entirely inside its own square so it can be repainted after a tree is cut. */
+function drawTile(g, lv, x, y) {
+  const th = THEMES[lv.theme], px = x * TILE, py = y * TILE, T = TILE;
+  const at = (xx, yy) => (xx < 0 || yy < 0 || xx >= lv.w || yy >= lv.h ? T_WALL : lv.t[yy * lv.w + xx]);
+  const tt = at(x, y), hs = hash2(x, y, lv.seed), r = mulberry32(hs);
+  const floorBase = () => {
+    g.fillStyle = th.floor; g.fillRect(px, py, T, T);
+    if (lv.theme === 'old') {                                   // red-brick paving
+      g.fillStyle = th.speck;
+      for (let yy = 0; yy < T; yy += 4) { g.fillRect(px, py + yy, T, 1); for (let xx = ((yy >> 2) % 2) * 3; xx < T; xx += 6) g.fillRect(px + xx, py + yy, 1, 4); }
+    } else if (lv.theme === 'council') {                        // carpet with a woven diamond
+      g.fillStyle = th.floor2;
+      for (let k = -3; k <= 3; k++) { g.fillRect(px + 10 + k, py + 10 - (3 - Math.abs(k)), 1, 1); g.fillRect(px + 10 + k, py + 10 + (3 - Math.abs(k)), 1, 1); }
+    }
+    for (let i = 0; i < 7; i++) { g.fillStyle = r() < 0.5 ? th.speck : th.floor2; g.fillRect(px + Math.floor(r() * T), py + Math.floor(r() * T), r() < 0.3 ? 2 : 1, 1); }
+  };
+  const groundShadows = () => {
+    if (solidT(at(x, y - 1))) { g.fillStyle = 'rgba(28,24,48,0.30)'; g.fillRect(px, py, T, 3); g.fillStyle = 'rgba(28,24,48,0.14)'; g.fillRect(px, py + 3, T, 2); }
+    if (solidT(at(x - 1, y))) { g.fillStyle = 'rgba(28,24,48,0.18)'; g.fillRect(px, py, 2, T); }
+  };
+  if (tt === T_FLOOR || tt === T_UMB || tt === T_TREE) {
+    floorBase();
+    if (tt === T_FLOOR) {
+      const L = !solidT(at(x - 1, y)), R = !solidT(at(x + 1, y)), U = !solidT(at(x, y - 1)), D = !solidT(at(x, y + 1));
+      if (lv.theme === 'alley') {
+        if (hs % 19 === 0) {                                    // manhole cover
+          discPx(g, px + 10, py + 10, 4, (dx, dy) => ((dx + dy) % 2 === 0 ? '#6f6e82' : '#7c7b90'));
+        } else if (hs % 7 === 0 && L && R && !U && !D) { g.fillStyle = th.line; g.fillRect(px + 3, py + 10, 6, 1); g.fillRect(px + 13, py + 10, 5, 1); }
+        else if (hs % 7 === 0 && U && D && !L && !R) { g.fillStyle = th.line; g.fillRect(px + 10, py + 3, 1, 6); g.fillRect(px + 10, py + 13, 1, 5); }
+        else if (hs % 11 === 3) { g.fillStyle = '#76758a'; g.fillRect(px + 4, py + 12, 5, 1); g.fillRect(px + 8, py + 13, 4, 1); g.fillRect(px + 11, py + 14, 3, 1); }  // crack
+      } else if (lv.theme === 'council') {
+        g.fillStyle = th.line;                                   // gold runner borders along the walls
+        if (!U) g.fillRect(px, py + 2, T, 1);
+        if (!D) g.fillRect(px, py + T - 3, T, 1);
+        if (!L) g.fillRect(px + 2, py, 1, T);
+        if (!R) g.fillRect(px + T - 3, py, 1, T);
+      }
+    }
+    groundShadows();
+    if (tt === T_TREE) {                                         // street tree: planter + leafy canopy
+      g.fillStyle = 'rgba(24,40,24,0.35)'; g.fillRect(px + 3, py + 13, 16, 5);
+      g.fillStyle = '#8d7b64'; g.fillRect(px + 6, py + 14, 9, 4); g.fillStyle = '#6a5a46'; g.fillRect(px + 7, py + 15, 7, 2);
+      discPx(g, px + 10, py + 9, 8, (dx, dy) => {
+        const n = hash2(dx + 20, dy + 20, hs & 255) % 9;
+        if (dx + dy < -6 || (dx + dy < -2 && n < 3)) return '#86d477';
+        if (dx + dy > 6 || (dx + dy > 2 && n < 2)) return '#2f7a45';
+        return n === 0 ? '#3f9150' : '#52a95c';
+      });
+    } else if (tt === T_UMB) {                                   // the 744萬 parasol that replaced it
+      g.fillStyle = 'rgba(28,24,48,0.28)'; g.fillRect(px + 4, py + 13, 15, 5);
+      discPx(g, px + 10, py + 9, 8, (dx, dy) => {
+        if (dx * dx + dy * dy <= 2) return '#f2c14e';
+        const a = Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * 8);
+        return a % 2 ? '#2fb5ad' : (dx + dy < -3 ? '#ffffff' : '#f4efe4');
+      });
+      g.fillStyle = '#ffd84a'; g.fillRect(px + 15, py + 15, 4, 3); g.fillStyle = '#b07a12'; g.fillRect(px + 16, py + 16, 2, 1);   // price tag
+    }
+    return;
+  }
+  // ── wall: a rooftop seen from above plus, where it faces the alley, its street facade ──
+  const below = solidT(at(x, y + 1)), FACE = 8, topH = below ? T : T - FACE;
+  const tints = th.tints || [th.roof];
+  g.fillStyle = tints[hash2(x >> 1, y >> 1, lv.seed + 7) % tints.length]; g.fillRect(px, py, T, topH);
+  const v = hs % 13;
+  if (lv.theme === 'old') {
+    g.fillStyle = th.roof2; for (let yy = 2; yy < topH; yy += 3) g.fillRect(px, py + yy, T, 1);
+    if (v === 0) { g.fillStyle = th.edge; g.fillRect(px, py + Math.floor(topH / 2), T, 2); }
+  } else if (v < 3) {                                            // corrugated tin roof
+    g.fillStyle = th.tin; g.fillRect(px + 2, py + 2, T - 4, topH - 4);
+    g.fillStyle = th.tin2; for (let xx = 3; xx < T - 2; xx += 2) g.fillRect(px + xx, py + 2, 1, topH - 4);
+  } else if (v === 3 && topH >= 12) {                            // water tower
+    // stainless rooftop water tank, Taipei-style
+    const wy = py + Math.min(9, topH - 5);
+    g.fillStyle = 'rgba(40,36,60,0.25)'; g.fillRect(px + 7, wy + 3, 9, 3);
+    discPx(g, px + 10, wy, 4, (dx, dy) => (dx + dy < -2 ? '#ffffff' : dx + dy > 2 ? '#9aa0b4' : dy === 0 ? '#b8bdcc' : '#d4d8e4'));
+  } else if (v === 4 && topH >= 10) {                            // AC unit
+    g.fillStyle = PAL.ink; g.fillRect(px + 5, py + 3, 9, 7); g.fillStyle = '#c9c6d4'; g.fillRect(px + 6, py + 4, 7, 5);
+    g.fillStyle = '#8e8a9e'; g.fillRect(px + 8, py + 5, 3, 3);
+  } else if (v === 5 && topH >= 10) {                            // rooftop potted plants
+    [[5, 5], [10, 7], [14, 4]].forEach(([dx, dy]) => { g.fillStyle = '#4fa35a'; g.fillRect(px + dx, py + dy, 3, 3); g.fillStyle = '#b8683a'; g.fillRect(px + dx, py + dy + 3, 3, 1); });
+  } else {
+    for (let i = 0; i < 4; i++) { g.fillStyle = th.roof2; g.fillRect(px + Math.floor(r() * T), py + Math.floor(r() * topH), 2, 1); }
+  }
+  // edges where the block meets open ground
+  if (!solidT(at(x, y - 1))) { g.fillStyle = th.roofHi; g.fillRect(px, py, T, 1); }
+  if (!solidT(at(x - 1, y))) { g.fillStyle = th.edge; g.fillRect(px, py, 1, topH); }
+  if (!solidT(at(x + 1, y))) { g.fillStyle = th.edge; g.fillRect(px + T - 1, py, 1, topH); }
+  if (!below) {
+    const fy = py + topH;
+    g.fillStyle = th.face; g.fillRect(px, fy, T, FACE);
+    g.fillStyle = th.eave; g.fillRect(px, fy, T, 1);
+    if (lv.theme === 'old') {                                     // 騎樓 arcade arches
+      g.fillStyle = th.win; g.fillRect(px + 3, fy + 3, 6, 5); g.fillRect(px + 12, fy + 3, 6, 5);
+      g.fillStyle = th.face; g.fillRect(px + 3, fy + 3, 1, 1); g.fillRect(px + 8, fy + 3, 1, 1); g.fillRect(px + 12, fy + 3, 1, 1); g.fillRect(px + 17, fy + 3, 1, 1);
+      if (hs % 4 === 0) { g.fillStyle = '#d8343f'; g.fillRect(px + 13, fy + 4, 4, 2); }   // red lantern
+    } else if (lv.theme === 'council') {                          // wood panelling, brass plaques, framed notices
+      g.fillStyle = th.face2; g.fillRect(px + 1, fy + 2, 8, 5); g.fillRect(px + 11, fy + 2, 8, 5);
+      g.fillStyle = th.face; g.fillRect(px + 2, fy + 3, 6, 3); g.fillRect(px + 12, fy + 3, 6, 3);
+      if (hs % 3 === 0) { g.fillStyle = th.grille; g.fillRect(px + 7, fy + 3, 6, 3); g.fillStyle = th.win; g.fillRect(px + 8, fy + 4, 4, 1); }
+    } else {                                                      // windows with 鐵窗 grilles, shop signs, AC boxes
+      const lit = hs % 5 === 0;
+      [[2, 7], [12, 6]].forEach(([wx, ww], k) => {
+        if (k === 1 && v === 8) { g.fillStyle = '#e8e8f0'; g.fillRect(px + wx, fy + 2, 6, 5); g.fillStyle = '#a8a8b8'; g.fillRect(px + wx + 1, fy + 3, 3, 3); return; }
+        g.fillStyle = lit && k === 0 ? th.winLit : th.win; g.fillRect(px + wx, fy + 2, ww, 4);
+        g.fillStyle = th.grille; for (let xx = wx; xx < wx + ww; xx += 2) g.fillRect(px + xx, fy + 2, 1, 4);
+        g.fillRect(px + wx, fy + 2, ww, 1);
+      });
+      if (v === 7) { g.fillStyle = '#d94a4a'; g.fillRect(px + 9, fy + 1, 3, 7); g.fillStyle = '#ffffff'; g.fillRect(px + 10, fy + 2, 1, 1); g.fillRect(px + 10, fy + 4, 1, 1); }
+    }
+    g.fillStyle = th.face2; g.fillRect(px, fy + FACE - 1, T, 1);
+    if (!solidT(at(x - 1, y))) { g.fillStyle = th.eave; g.fillRect(px, fy, 1, FACE); }
+    if (!solidT(at(x + 1, y))) { g.fillStyle = th.eave; g.fillRect(px + T - 1, fy, 1, FACE); }
+  }
+}
+
+function renderMap(lv) {
+  const [c, g] = makeCanvas(lv.w * TILE, lv.h * TILE);
+  for (let y = 0; y < lv.h; y++) for (let x = 0; x < lv.w; x++) drawTile(g, lv, x, y);
+  // street lamps at junctions: a pole base and a lamp head
+  for (const l of lv.lamps) {
+    const px = l.x * TILE, py = l.y * TILE;
+    g.fillStyle = 'rgba(28,24,48,0.3)'; g.fillRect(px + 2, py + 3, 4, 2);
+    g.fillStyle = PAL.ink; g.fillRect(px + 2, py + 1, 3, 3);
+    g.fillStyle = '#ffe9a0'; g.fillRect(px + 3, py + 2, 1, 1);
+  }
+  return c;
+}
+
+// ───────────────────────────── 6. PARTICLES ─────────────────────────────
+class Particles {
+  constructor() { this.list = []; }
+  clear() { this.list.length = 0; }
+  emit(p) { if (this.list.length < 900) this.list.push(Object.assign({ vx: 0, vy: 0, g: 0, life: 0.5, size: 1, drag: 0 }, p, { max: p.life || 0.5 })); }
+  update(dt) {
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      const p = this.list[i];
+      p.life -= dt;
+      if (p.life <= 0) { this.list.splice(i, 1); continue; }
+      p.vy += p.g * dt; p.vx *= 1 - p.drag * dt; p.vy *= 1 - p.drag * dt * (p.g ? 0 : 1);
+      p.x += p.vx * dt; p.y += p.vy * dt;
+    }
+  }
+  draw(ctx, ox = 0, oy = 0) {
+    for (const p of this.list) {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1) ** 0.6;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(snap(p.x - ox), snap(p.y - oy), p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ────────────────────────────── 7. INPUT ──────────────────────────────
+/**
+ * Keyboard: arrows/WASD move, Space/J throws 小卷 (and confirms on menus), K/L/Shift throws 大藍莓,
+ * Enter confirms, P/Esc pauses. Touch: drag anywhere on the left 60% for a floating joystick,
+ * on-screen buttons for the items; a short tap confirms on menus.
+ */
+class Input {
+  constructor(el, h) {
+    this.k = { up: false, down: false, left: false, right: false };
+    this.joy = null; this.touchUI = false;
+    const MAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
+    window.addEventListener('keydown', (e) => {
+      const m = MAP[e.code];
+      if (m) { this.k[m] = true; e.preventDefault(); return; }
+      if (e.code === 'Space') e.preventDefault();
+      if (e.repeat) return;
+      if (e.code === 'Space' || e.code === 'KeyJ') h.primary(performance.now());
+      else if (e.code === 'Enter') { e.preventDefault(); h.confirm(performance.now()); }
+      else if (e.code === 'KeyK' || e.code === 'KeyL' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') h.secondary();
+      else if (e.code === 'KeyP' || e.code === 'Escape') h.pause();
+    });
+    window.addEventListener('keyup', (e) => { const m = MAP[e.code]; if (m) this.k[m] = false; });
+    const logical = (e) => { const r = el.getBoundingClientRect(); return { x: ((e.clientX - r.left) * VIEW_W) / r.width, y: ((e.clientY - r.top) * VIEW_H) / r.height }; };
+    const taps = new Map();
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); el.focus();
+      if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') this.touchUI = true;
+      const p = logical(e), now = performance.now();
+      const btn = this.touchUI ? h.hitButton(p) : null;
+      if (btn) { h.button(btn); taps.set(e.pointerId, { btn: true }); return; }
+      if (e.pointerType !== 'mouse' && !this.joy && h.wantsJoystick(p)) { this.joy = { id: e.pointerId, ox: p.x, oy: p.y, x: p.x, y: p.y, t: now, moved: 0 }; return; }
+      taps.set(e.pointerId, { x: p.x, y: p.y, t: now, moved: 0 });
+    });
+    el.addEventListener('pointermove', (e) => {
+      const p = logical(e);
+      if (this.joy && this.joy.id === e.pointerId) { this.joy.moved = Math.max(this.joy.moved, Math.hypot(p.x - this.joy.ox, p.y - this.joy.oy)); this.joy.x = p.x; this.joy.y = p.y; return; }
+      const tp = taps.get(e.pointerId);
+      if (tp && !tp.btn) tp.moved = Math.max(tp.moved, Math.hypot(p.x - tp.x, p.y - tp.y));
+    });
+    // A tap = short press that barely moved; its start time travels along so end cards can reject
+    // presses that began before the input lock lifted. Joystick drags and button presses never confirm.
+    const end = (e, cancel) => {
+      const now = performance.now();
+      if (this.joy && this.joy.id === e.pointerId) {
+        const j = this.joy; this.joy = null;
+        if (!cancel && j.moved < 5 && now - j.t < 350) h.confirm(j.t);
+        return;
+      }
+      const tp = taps.get(e.pointerId); taps.delete(e.pointerId);
+      if (!cancel && tp && !tp.btn && tp.moved < 8 && now - tp.t < 450) h.confirm(tp.t);
+    };
+    el.addEventListener('pointerup', (e) => end(e, false));
+    el.addEventListener('pointercancel', (e) => end(e, true));
+    const clear = () => { this.k.up = this.k.down = this.k.left = this.k.right = false; this.joy = null; taps.clear(); };
+    window.addEventListener('blur', () => { clear(); h.blur(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { clear(); h.blur(); } });
+  }
+  /** Movement vector, length ≤ 1. */
+  get vec() {
+    let x = (this.k.right ? 1 : 0) - (this.k.left ? 1 : 0), y = (this.k.down ? 1 : 0) - (this.k.up ? 1 : 0);
+    if (this.joy) {
+      const dx = this.joy.x - this.joy.ox, dy = this.joy.y - this.joy.oy, d = Math.hypot(dx, dy);
+      if (d > 4) { const m = Math.min(1, d / 16); x = (dx / d) * m; y = (dy / d) * m; }
+    }
+    const d = Math.hypot(x, y);
+    return d > 1 ? { x: x / d, y: y / d } : { x, y };
+  }
+}
+
+// ────────────────────────────── 8. GAME ──────────────────────────────
+class Game {
+  constructor(canvas) {
+    this.canvas = canvas; this.ctx = canvas.getContext('2d');
+    [this.lightC, this.lightG] = makeCanvas(VIEW_W, VIEW_H);
+    this.vignette = Game.makeVignette();
+    this.particles = new Particles();   // world: dust, chips, ink (under the darkness)
+    this.glints = new Particles();      // world: sparkles that should shine through the dark
+    this.cardFx = new Particles();      // ink dust from the 敗選 stamp
+    this.hi = Number(localStorage.getItem(STORAGE_HI)) || 0;
+    this.time = 0; this.shake = 0; this.flash = 0; this.flashColor = '255,255,255'; this.alarm = false; this.alarmLevel = 0;
+    this.paused = false;
+    this.debug = { god: false, noEvents: false };
+    this.input = new Input(canvas, {
+      primary: (t) => this.onPrimary(t),
+      secondary: () => this.throwBerry(),
+      confirm: (t) => this.onConfirm(t),
+      pause: () => this.togglePause(),
+      blur: () => { if (this.state === 'playing' && !this.paused) this.paused = true; },
+      hitButton: (p) => this.hitButton(p),
+      button: (b) => this.onButton(b),
+      wantsJoystick: (p) => this.state === 'playing' && !this.paused && p.x < VIEW_W * 0.62 && p.y > HUD_H,
+    });
+    this.state = 'title'; this.stateT = 0;
+    this.newGame(true);
+  }
+  static makeVignette() {
+    const [c, g] = makeCanvas(VIEW_W, VIEW_H);
+    const gr = g.createRadialGradient(VIEW_W / 2, VIEW_H / 2 + 8, VIEW_H * 0.58, VIEW_W / 2, VIEW_H / 2 + 8, VIEW_W * 0.6);
+    gr.addColorStop(0, 'rgba(235,30,45,0)'); gr.addColorStop(0.55, 'rgba(235,30,45,0.35)'); gr.addColorStop(1, 'rgba(235,30,45,0.95)');
+    g.fillStyle = gr; g.fillRect(0, 0, VIEW_W, VIEW_H);
+    return c;
+  }
+
+  // ── Lifecycle ──
+  newGame(demo = false) {
+    this.demo = demo;
+    this.baseSeed = demo ? 20260 : (Math.random() * 1e9) | 0;
+    this.score = 0; this.lives = PLAYER.LIVES; this.battery = 100;
+    this.inv = { squid: 1, berry: 0, save: 0 };
+    this.stats = { reloc: 0, caught: 0, thrown: 0, trees: 0, rats: 0, berries: 0, saves: 0 };
+    this.newBest = false; this.acceptAt = null; this.stamped = false; this.cardFx.clear();
+    this.seq = null; this.banner = null; this.toasts = []; this.alarm = false; this.alarmLevel = 0;
+    this.loadLevel(1);
+  }
+  start() {
+    this.newGame(false);
+    this.state = 'playing'; this.stateT = 0; this.paused = false;
+    this.levelBanner();
+  }
+  loadLevel(n) {
+    const lv = this.lv = genLevel(n, this.baseSeed + n * 7919);
+    this.mapC = renderMap(lv); this.mapG = this.mapC.getContext('2d');
+    const s = this.tileCenter(lv.start.x, lv.start.y);
+    this.p = { x: s.x, y: s.y, ang: 0, face: 1, fx: 1, fy: 0, anim: 0, moving: false, invuln: 1.5, slowT: 0, sweatT: 0, bubble: null, blinkT: 3, dustT: 0 };
+    // face into the maze
+    const open = DIRS4.find(([dx, dy]) => !this.solidTile(lv.start.x + dx, lv.start.y + dy)) || [1, 0];
+    this.p.fx = open[0]; this.p.fy = open[1]; this.p.ang = Math.atan2(open[1], open[0]); if (open[0]) this.p.face = open[0];
+    const e = this.tileCenter(lv.exit.x, lv.exit.y);
+    this.exit = { x: e.x, y: e.y, run: null };
+    this.shots = []; this.rings = []; this.cuts = []; this.texts = []; this.minion = null;
+    this.particles.clear(); this.glints.clear();
+    this.milkTaken = false; this.levelGold = 0;
+    this.placeItems(); this.spawnChasers(); this.spawnRats();
+    this.cutT = this.cutInterval() * 0.6;
+    this.ratWaveT = n >= 2 ? rand(16, 24) : Infinity; this.ratWarn = 0;
+    this.dirtyFields = true; this.updateFields();
+    this.cam = { x: 0, y: 0 }; this.updateCamera(0, true);
+    this.computeLight();
+  }
+  levelBanner() {
+    const n = this.lv.n;
+    const sub = n === 1 ? '找到「連任」大門！' : n === 3 ? `魔王 ${NAMES.boss} 出沒注意！` : `連任大門溜走 ${this.stats.reloc} 次・下一扇一定行！`;
+    this.banner = { title: `第${n}關・${this.lv.place}`, sub, t: 0, dur: 2.4, style: 'gold' };
+  }
+  onPrimary(t) {
+    if (this.state === 'playing' && !this.paused) this.throwSquid();
+    else this.onConfirm(t);
+  }
+  onConfirm(pressT) {
+    if (this.paused) { this.paused = false; return; }
+    if (this.state === 'title') this.start();
+    // the 敗選 card only closes on a fresh press that began after the input lock lifted
+    else if (this.state === 'over' && this.acceptAt !== null && pressT >= this.acceptAt) this.start();
+  }
+  togglePause() { if (this.state === 'playing') this.paused = !this.paused; }
+  touchButtons() {
+    return [
+      { id: 'squid', x: VIEW_W - 28, y: VIEW_H - 28, r: 16 },
+      { id: 'berry', x: VIEW_W - 66, y: VIEW_H - 20, r: 12 },
+      { id: 'pause', x: VIEW_W - 14, y: HUD_H + 13, r: 9 },
+    ];
+  }
+  hitButton(p) {
+    if (this.state !== 'playing' || this.paused) return null;
+    const b = this.touchButtons().find((b) => Math.hypot(p.x - b.x, p.y - b.y) <= b.r + 4);
+    return b ? b.id : null;
+  }
+  onButton(id) { if (id === 'squid') this.throwSquid(); else if (id === 'berry') this.throwBerry(); else if (id === 'pause') this.togglePause(); }
+
+  // ── Map helpers ──
+  tileCenter(tx, ty) { return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 }; }
+  solidTile(tx, ty) { const lv = this.lv; return tx < 0 || ty < 0 || tx >= lv.w || ty >= lv.h || solidT(lv.t[ty * lv.w + tx]); }
+  solidAt(x, y) { return this.solidTile(Math.floor(x / TILE), Math.floor(y / TILE)); }
+  tileIdx(x, y) { const lv = this.lv; return clamp(Math.floor(y / TILE), 0, lv.h - 1) * lv.w + clamp(Math.floor(x / TILE), 0, lv.w - 1); }
+  los(x0, y0, x1, y1) {
+    const d = Math.hypot(x1 - x0, y1 - y0), n = Math.ceil(d / 4);
+    for (let i = 1; i < n; i++) if (this.solidAt(lerp(x0, x1, i / n), lerp(y0, y1, i / n))) return false;
+    return true;
+  }
+  updateFields() {
+    const lv = this.lv, ti = this.tileIdx(this.p.x, this.p.y);
+    if (this.dirtyFields) {
+      // 南鼠北送 rats run "north": down a distance field seeded on the top-most open row
+      const src = [];
+      for (let y = 1; y < lv.h && !src.length; y++) for (let x = 1; x < lv.w - 1; x++) if (!solidT(lv.t[y * lv.w + x])) src.push(y * lv.w + x);
+      this.north = bfs(lv, src);
+    }
+    if (this.dirtyFields || ti !== this.fieldTile) { this.field = bfs(lv, [ti]); this.fieldTile = ti; }
+    this.dirtyFields = false;
+  }
+  repaintAround(tx, ty) {
+    const lv = this.lv;
+    for (let y = ty - 1; y <= ty + 1; y++) for (let x = tx - 1; x <= tx + 1; x++) if (x >= 0 && y >= 0 && x < lv.w && y < lv.h) drawTile(this.mapG, lv, x, y);
+    const g = this.mapG;
+    for (const l of lv.lamps) if (Math.abs(l.x - tx) <= 1 && Math.abs(l.y - ty) <= 1) {
+      const px = l.x * TILE, py = l.y * TILE;
+      g.fillStyle = 'rgba(28,24,48,0.3)'; g.fillRect(px + 2, py + 3, 4, 2);
+      g.fillStyle = PAL.ink; g.fillRect(px + 2, py + 1, 3, 3);
+      g.fillStyle = '#ffe9a0'; g.fillRect(px + 3, py + 2, 1, 1);
+    }
+  }
+  /** Space the picks out: each new tile at least `gap` (Manhattan) from everything already used. */
+  pickSpread(pool, used, minStart, gap = 3) {
+    const lv = this.lv;
+    for (const i of shuffle(pool.slice())) {
+      if (used.has(i) || lv.distStart[i] < minStart) continue;
+      const x = i % lv.w, y = (i / lv.w) | 0;
+      let ok = true;
+      for (const u of used) if (Math.abs(u % lv.w - x) + Math.abs(((u / lv.w) | 0) - y) < gap) { ok = false; break; }
+      if (ok) { used.add(i); return i; }
+    }
+    return -1;
+  }
+  placeItems() {
+    const lv = this.lv, n = lv.n, used = new Set([lv.exit.y * lv.w + lv.exit.x, lv.start.y * lv.w + lv.start.x]);
+    this.items = [];
+    const add = (kind, i, extra = {}) => { if (i >= 0) this.items.push({ kind, x: (i % lv.w) * TILE + TILE / 2, y: ((i / lv.w) | 0) * TILE + TILE / 2, t: Math.random() * 6, cd: 0, ...extra }); };
+    for (let k = 0; k < 3; k++) {                               // 特級大果藍莓 hide in dead ends
+      let i = this.pickSpread(lv.deadEnds, used, 6, 6);
+      if (i < 0) i = this.pickSpread(lv.floors, used, 6, 6);
+      add('gold', i);
+    }
+    for (let k = 0; k < 4 + Math.min(4, n >> 1); k++) add('squid', this.pickSpread(lv.floors, used, 3));
+    for (let k = 0; k < (n >= 2 ? 2 : 1); k++) if (Math.random() < 0.85) add('berry', this.pickSpread(lv.floors, used, 7));
+    const milks = n >= 3 ? 3 : 2, fake = Math.random() < 0.7 ? randInt(0, milks - 1) : -1;
+    for (let k = 0; k < milks; k++) add('milk', this.pickSpread(lv.floors, used, 5, 5), { fake: k === fake });
+    if (n >= 2 && Math.random() < 0.5) add('phone', this.pickSpread(lv.floors, used, 8, 4));
+  }
+  makeChaser(kind, tx, ty) {
+    const boss = kind === 'boss', lm = 1 + 0.045 * (this.lv.n - 1);
+    const { x, y } = this.tileCenter(tx, ty);
+    return {
+      kind, boss, x, y, tx, ty, ptx: tx, pty: ty, mode: 'wander', modeT: 0, lost: 0, cool: 0,
+      wanderSpeed: (boss ? 30 : 25) * lm, chaseSpeed: Math.min(boss ? 70 : 63, (boss ? 61 : 50) * lm),
+      face: 1, anim: Math.random() * 4, jit: Math.random() * 6, seeT: Math.random() * 0.2, sees: false,
+      bubble: null, bubbleCd: 0, alertT: 0, mark: '', markT: 0, lineIdx: -1, met: false, argueT: 0, argueFlip: false, spr: null,
+    };
+  }
+  spawnChasers() {
+    const lv = this.lv, n = lv.n, count = Math.min(2 + n, 9);
+    const used = new Set(), picks = [];
+    for (let k = 0; k < count; k++) { const i = this.pickSpread(lv.floors, used, 12, 6); if (i >= 0) picks.push(i); }
+    this.chasers = picks.map((i, k) => this.makeChaser(n >= 3 && k === 0 ? 'boss' : CHASER_ORDER[k % 4], i % lv.w, (i / lv.w) | 0));
+  }
+  spawnRats() { this.rats = []; for (let k = 0; k < 5 + this.lv.n; k++) this.addRat(false); }
+  addRat(wave, i) {
+    const lv = this.lv;
+    if (i === undefined) {
+      const p = this.p, pool = lv.floors.filter((j) => Math.hypot((j % lv.w) * TILE - p.x, ((j / lv.w) | 0) * TILE - p.y) > TILE * 7);
+      if (!pool.length) return;
+      i = pick(pool);
+    }
+    const tx = i % lv.w, ty = (i / lv.w) | 0, c = this.tileCenter(tx, ty);
+    this.rats.push({ kind: Math.random() < 0.6 ? 'rat' : 'roach', x: c.x + rand(-3, 3), y: c.y, tx, ty, ptx: tx, pty: ty, mode: wave ? 'wave' : 'roam', t: Math.random() * 3, flee: 0, cool: 0, life: 0, face: 1, counted: false });
+  }
+
+  // ── Update ──
+  update(dt) {
+    this.time += dt;
+    if (this.paused) return;
+    this.stateT += dt;
+    this.shake = Math.max(0, this.shake - dt * 18);
+    this.flash = Math.max(0, this.flash - dt * 2.5);
+    if (this.state === 'title') this.updateDemo(dt);
+    else if (this.state === 'over') this.updateEnd(dt);
+    else {
+      if (this.seq) this.updateSeq(dt); else this.updatePlay(dt);
+      this.updateCamera(dt);
+    }
+    this.updateFx(dt);
+  }
+  updateDemo(dt) {
+    const p = this.p;
+    p.ang = -Math.PI / 2 + Math.sin(this.time * 0.55) * 1.45;
+    p.fx = Math.cos(p.ang); p.fy = Math.sin(p.ang); p.face = p.fx >= 0 ? 1 : -1;
+    this.computeLight();
+    for (const c of this.chasers) { c.anim += dt; this.stepTiles(c, c.wanderSpeed * dt, () => null, true); }
+    for (const r of this.rats) { r.t += dt; this.stepTiles(r, (r.kind === 'rat' ? 34 : 26) * dt, () => null, true); }
+    this.updateCamera(dt);
+  }
+  updatePlay(dt) {
+    this.score += 8 * dt;
+    this.updatePlayer(dt);
+    this.battery = Math.max(0, this.battery - LIGHT.DRAIN * dt);
+    this.alarm = this.chasers.some((c) => c.mode === 'chase');
+    this.computeLight();
+    this.updateFields();
+    for (const c of this.chasers) this.updateChaser(c, dt);
+    this.updateRats(dt);
+    this.updateShots(dt);
+    this.updateItems(dt);
+    this.updateEvents(dt);
+    if (!this.seq) this.checkExit();
+  }
+  updatePlayer(dt) {
+    const p = this.p, v = this.input.vec, sp = PLAYER.SPEED * (p.slowT > 0 ? PLAYER.SLOW : 1);
+    p.slowT = Math.max(0, p.slowT - dt); p.invuln = Math.max(0, p.invuln - dt); p.sweatT = Math.max(0, p.sweatT - dt);
+    p.moving = Math.abs(v.x) + Math.abs(v.y) > 0.05;
+    if (p.moving) {
+      const d = Math.hypot(v.x, v.y);
+      p.fx = v.x / d; p.fy = v.y / d;
+      if (Math.abs(v.x) > 0.2) p.face = v.x > 0 ? 1 : -1;
+      this.moveBody(p, v.x * sp * dt, v.y * sp * dt);
+      p.anim += dt * (p.slowT > 0 ? 5 : 9);
+      if ((p.dustT -= dt) <= 0) {
+        p.dustT = 0.16;
+        this.particles.emit({ x: p.x + rand(-3, 3), y: p.y + FEET - 1, vx: -p.fx * 12 + rand(-6, 6), vy: rand(-10, -2), drag: 3, life: 0.35, color: p.slowT > 0 ? '#9a7a5a' : '#cfc8d8' });
+      }
+    }
+    if ((p.blinkT -= dt) <= 0) p.blinkT = rand(2.5, 4.5);
+    const target = Math.atan2(p.fy, p.fx);
+    p.ang += angDiff(target, p.ang) * Math.min(1, dt * 14);
+  }
+  boxFree(x, y) {
+    const hw = PLAYER.HW, hh = PLAYER.HH;
+    return !this.solidAt(x - hw, y - hh) && !this.solidAt(x + hw - 0.01, y - hh) && !this.solidAt(x - hw, y + hh - 0.01) && !this.solidAt(x + hw - 0.01, y + hh - 0.01);
+  }
+  moveBody(p, mx, my) {
+    if (mx) { if (this.boxFree(p.x + mx, p.y)) p.x += mx; else if (Math.abs(my) < 1e-6) this.assist(p, 'y', mx); }
+    if (my) { if (this.boxFree(p.x, p.y + my)) p.y += my; else if (Math.abs(mx) < 1e-6) this.assist(p, 'x', my); }
+  }
+  /** Rounding corners: blocked on one axis, slide toward the centre of the nearest open lane ahead. */
+  assist(p, axis, m) {
+    const step = Math.abs(m), sg = Math.sign(m);
+    const along = axis === 'y' ? p.x : p.y, cross = axis === 'y' ? p.y : p.x;
+    const ahead = Math.floor((along + sg * (axis === 'y' ? PLAYER.HW : PLAYER.HH) + sg) / TILE);
+    const c0 = Math.floor(cross / TILE);
+    const lanes = [c0, c0 - 1, c0 + 1].map((c) => ({ c, centre: c * TILE + TILE / 2 })).sort((a, b) => Math.abs(a.centre - cross) - Math.abs(b.centre - cross));
+    for (const { c, centre } of lanes) {
+      if (Math.abs(centre - cross) > 12) continue;
+      const blocked = axis === 'y' ? this.solidTile(ahead, c) : this.solidTile(c, ahead);
+      if (blocked) continue;
+      const nv = approach(cross, centre, step);
+      if (axis === 'y') { if (this.boxFree(p.x, nv)) p.y = nv; } else if (this.boxFree(nv, p.y)) p.x = nv;
+      return;
+    }
+  }
+  /** Torch: a ray-cast cone (walls block it, facades catch the light) plus a small glow around him. */
+  computeLight() {
+    const p = this.p, b = this.battery;
+    const f = b > 0 ? 0.45 + 0.55 * clamp(b / 40, 0, 1) : 0.3;
+    const range = LIGHT.RANGE * f, half = LIGHT.HALF * (0.62 + 0.38 * f);
+    let on = 1;
+    if (b <= 0) on = 0.45;
+    else if (b < 15 && Math.sin(this.time * 31) + Math.sin(this.time * 17.3) > 1.35) on = 0.3;     // low-battery flicker
+    const jit = this.alarm && this.state === 'playing' ? (Math.sin(this.time * 37) * 0.6 + Math.sin(this.time * 61) * 0.4) * 0.08 : 0;
+    const ang = p.ang + jit, ox = p.x + Math.cos(ang) * 3, oy = p.y - 2;
+    const poly = [];
+    for (let i = 0; i <= LIGHT.RAYS; i++) {
+      const a = ang - half + (2 * half * i) / LIGHT.RAYS, cx = Math.cos(a), cy = Math.sin(a);
+      let d = 2;
+      while (d < range && !this.solidAt(ox + cx * d, oy + cy * d)) d += 2;
+      if (d < range) d = Math.min(range, d + 7);                // let the beam spill onto the facade it hits
+      poly.push([ox + cx * d, oy + cy * d]);
+    }
+    this.light = { x: ox, y: oy, ang, half, range, on, poly };
+  }
+  inLight(x, y) {
+    const L = this.light;
+    if (!L) return false;
+    const dx = x - L.x, dy = y - L.y, d = Math.hypot(dx, dy);
+    if (d < LIGHT.AURA * 0.75) return true;
+    if (L.on < 0.9 || d > L.range) return false;
+    if (Math.abs(angDiff(Math.atan2(dy, dx), L.ang)) > L.half) return false;
+    return this.los(L.x, L.y, x, y);
+  }
+  nearLamp(x, y) { return this.lv.lamps.some((l) => Math.hypot(l.x * TILE + 4 - x, l.y * TILE + 11 - y) < 26); }
+
+  // ── Chasers ──
+  canSee(c) {
+    const p = this.p, d = Math.hypot(p.x - c.x, p.y - c.y);
+    const lit = this.inLight(c.x, c.y - 6);                     // shining the torch in someone's face gets noticed
+    const range = (lit ? SIGHT.LIT : SIGHT.NEAR) + (c.boss ? TILE : 0);
+    return d < range && this.los(c.x, c.y - 3, p.x, p.y - 3);
+  }
+  say(e, text, t = 2.4, color = '#c2364a') { e.bubble = { text, t, color }; }
+  startChase(c) {
+    c.mode = 'chase'; c.lost = 0; c.alertT = 0.9; c.bubbleCd = rand(3.6, 5);
+    const lines = LINES[c.kind];
+    c.lineIdx = (c.lineIdx + 1) % lines.length;
+    this.say(c, lines[c.lineIdx]);
+    if (!c.met) { c.met = true; this.toast(c.boss ? `魔王 ${NAMES.boss} 出現了！` : `${NAMES[c.kind]} 發現你了！`, c.boss ? '#ff7a7a' : '#ffd45e'); }
+    for (let i = 0; i < 8; i++) this.glints.emit({ x: c.x, y: c.y - 26, vx: rand(-45, 45), vy: rand(-60, -20), g: 140, life: 0.45, color: i % 2 ? '#ff5a5a' : '#ffffff', size: 2 });
+    this.p.sweatT = 1.6;
+  }
+  updateChaser(c, dt) {
+    c.anim += dt; c.alertT -= dt; c.markT -= dt; c.cool = Math.max(0, c.cool - dt);
+    if (c.bubble && (c.bubble.t -= dt) <= 0) c.bubble = null;
+    if (c.mode === 'stun' || c.mode === 'argue') {
+      c.modeT -= dt;
+      if (c.mode === 'argue' && (c.argueT -= dt) <= 0) {
+        c.argueT = 1.15; c.argueFlip = !c.argueFlip;
+        this.say(c, c.argueFlip ? '這是藍莓嗎？' : '？？？', 1.05, '#5b3fb8');
+      }
+      if (c.modeT <= 0) { c.mode = 'wander'; c.cool = 1.2; c.bubble = null; c.mark = '？'; c.markT = 0.9; }
+      return;
+    }
+    if ((c.seeT -= dt) <= 0) { c.seeT = 0.12; c.sees = c.cool <= 0 && this.canSee(c); }
+    if (c.sees) { if (c.mode !== 'chase') this.startChase(c); c.lost = 0; }
+    else if (c.mode === 'chase') {
+      c.lost += dt;
+      if (c.lost > (c.boss ? SIGHT.BOSS_FORGET : SIGHT.FORGET)) { c.mode = 'wander'; c.mark = '？'; c.markT = 1.1; c.bubble = null; }
+    }
+    if (c.mode === 'chase' && (c.bubbleCd -= dt) <= 0) {
+      c.bubbleCd = rand(3.6, 5);
+      c.lineIdx = (c.lineIdx + 1) % LINES[c.kind].length;
+      this.say(c, LINES[c.kind][c.lineIdx]);
+    }
+    const p = this.p, dpx = p.x - c.x, dpy = p.y - c.y, dp = Math.hypot(dpx, dpy);
+    const speed = c.mode === 'chase' ? c.chaseSpeed : c.wanderSpeed;
+    if (c.mode === 'chase' && c.sees && dp < TILE * 1.2) {
+      // close enough: lunge straight at him
+      if (dp > 0.01) { const st = Math.min(dp, speed * dt); c.x += (dpx / dp) * st; c.y += (dpy / dp) * st; }
+      if (Math.abs(dpx) > 1) c.face = dpx > 0 ? 1 : -1;
+      c.tx = c.ptx = Math.floor(c.x / TILE); c.ty = c.pty = Math.floor(c.y / TILE);
+    } else {
+      if (c.mode === 'chase' && this.field && (c.ptx !== c.tx || c.pty !== c.ty)) {
+        // mid-step when he's spotted: turn round at once instead of finishing the step into a side alley
+        const w = this.lv.w, back = this.field[c.pty * w + c.ptx], ahead = this.field[c.ty * w + c.tx];
+        if (back >= 0 && (ahead < 0 || back < ahead) && !this.solidTile(c.ptx, c.pty)) { [c.tx, c.ptx] = [c.ptx, c.tx]; [c.ty, c.pty] = [c.pty, c.ty]; }
+      }
+      this.stepTiles(c, speed * dt, (x, y, opts) => {
+        if (c.mode !== 'chase' || !this.field) return null;
+        let best = null, bd = 1e9;
+        for (const o of opts) { const d = this.field[o[1] * this.lv.w + o[0]]; if (d >= 0 && d < bd) { bd = d; best = o; } }
+        return best;
+      });
+    }
+    if (c.cool <= 0 && dp < 11 && p.invuln <= 0 && !this.debug.god && !this.seq) this.caught(c);
+  }
+  /** Tile-to-tile walking (chasers, critters): reach a tile centre, then ask `choose` for the next. */
+  stepTiles(e, step, choose) {
+    for (let guard = 0; guard < 4 && step > 0; guard++) {
+      const cx = e.tx * TILE + TILE / 2, cy = e.ty * TILE + TILE / 2, dx = cx - e.x, dy = cy - e.y, d = Math.hypot(dx, dy);
+      if (Math.abs(dx) > 0.5) e.face = dx > 0 ? 1 : -1;
+      if (d > step) { e.x += (dx / d) * step; e.y += (dy / d) * step; return; }
+      e.x = cx; e.y = cy; step -= d;
+      const opts = DIRS4.map(([ox, oy]) => [e.tx + ox, e.ty + oy]).filter(([x, y]) => !this.solidTile(x, y));
+      if (!opts.length) return;
+      const nxt = choose(e.tx, e.ty, opts) || this.wanderPick(e, opts);
+      e.ptx = e.tx; e.pty = e.ty; e.tx = nxt[0]; e.ty = nxt[1];
+    }
+  }
+  wanderPick(e, opts) {
+    const fwd = opts.filter(([x, y]) => !(x === e.ptx && y === e.pty));
+    if (!fwd.length) return opts[0];
+    const sx = e.tx - e.ptx, sy = e.ty - e.pty;
+    const straight = fwd.find(([x, y]) => x - e.tx === sx && y - e.ty === sy);
+    return straight && Math.random() < 0.55 ? straight : pick(fwd);
+  }
+  caught(c) {
+    if (this.seq) return;
+    if (this.inv.save > 0) { this.startSave(c); return; }
+    this.lives--; this.stats.caught++;
+    this.seq = { type: 'caught', t: 0, by: c };
+    this.shake = 6; this.flash = 0.7; this.flashColor = '255,90,90';
+    this.say(c, '請市長回答！', 2.0);
+    c.alertT = 0;
+  }
+  startSave(c) {
+    const p = this.p;
+    this.inv.save = 0; this.stats.saves++;
+    const side = c.x < p.x ? -1 : c.x > p.x ? 1 : (c.y < p.y ? -1 : 1);
+    const tx = lerp(p.x, c.x, 0.5), ty = lerp(p.y, c.y, 0.5) + 1;
+    this.minion = { sx: p.x - side * 70, sy: p.y - 6, x: p.x - side * 70, y: p.y - 6, tx, ty, z: 0, t: 0, face: side, leaving: false, lt: 0 };
+    this.say(this.minion, '局長代答！', 2.2, '#2f63b8');
+    c.mode = 'stun'; c.modeT = 3.5; c.bubble = null; c.alertT = 0;
+    for (const o of this.chasers) if (o !== c && Math.hypot(o.x - p.x, o.y - p.y) < TILE * 2.5) o.cool = 3;
+    this.seq = { type: 'save', t: 0, by: c };
+    this.flash = 0.5; this.flashColor = '140,190,255';
+    this.toast('首長救駕！', '#7fb8ff');
+  }
+  updateSeq(dt) {
+    const s = this.seq, p = this.p;
+    s.t += dt;
+    if (s.type === 'caught') {
+      if (Math.random() < dt * 16) this.glints.emit({ x: p.x + rand(-6, 6), y: p.y - 18, vx: rand(-30, 30), vy: rand(-40, -10), g: 160, life: 0.5, color: '#8fd3ff', size: 1 + (Math.random() < 0.4) });
+      if (s.t >= 2.0) {
+        if (this.lives <= 0) { this.seq = { type: 'ko', t: 0 }; this.shake = 4; return; }
+        this.seq = null; p.invuln = PLAYER.INVULN;
+        for (const c of this.chasers) if (Math.hypot(c.x - p.x, c.y - p.y) < TILE * 3) { c.cool = 3; c.mode = 'wander'; }
+        this.text(`還剩 ${this.lives} 條命`, p.x, p.y - 34, '#ff9a9a', 1.4);
+      }
+    } else if (s.type === 'ko') {
+      if (Math.random() < dt * 10) this.glints.emit({ x: p.x + rand(-8, 8), y: p.y - 24, vx: rand(-10, 10), vy: rand(-20, -8), life: 0.6, color: PAL.star, size: 2 });
+      if (s.t >= 1.5) this.endGame();
+    } else if (s.type === 'save') {
+      const m = this.minion, k = clamp(s.t / 0.45, 0, 1);
+      m.x = lerp(m.sx, m.tx, k); m.y = lerp(m.sy, m.ty, k); m.z = Math.sin(k * Math.PI) * 18;
+      if (k >= 1 && !m.landed) { m.landed = true; this.shake = 3; for (let i = 0; i < 10; i++) this.particles.emit({ x: m.x + rand(-6, 6), y: m.y + FEET, vx: rand(-40, 40), vy: rand(-30, -5), drag: 3, life: 0.4, color: '#e6e0f0' }); }
+      if (s.t >= 1.8) { this.seq = null; p.invuln = 1.6; m.leaving = true; }
+    } else if (s.type === 'escape') {
+      const e = this.exit, r = e.run;
+      r.t += dt; r.dx += r.vx * dt; r.dy += r.vy * dt;
+      if (Math.random() < dt * 30) this.particles.emit({ x: e.x + r.dx + rand(-6, 6), y: e.y + r.dy + FEET, vx: rand(-20, 20), vy: rand(-20, 0), drag: 3, life: 0.45, color: '#e8dcc0' });
+      if (Math.random() < dt * 20) this.glints.emit({ x: e.x + r.dx + rand(-8, 8), y: e.y + r.dy - 20, vx: rand(-20, 20), vy: rand(-30, -10), life: 0.6, color: '#ffe27a', size: 2 });
+      for (const c of this.chasers) { if (c.bubble) c.bubble.t -= dt; }
+      if (s.t >= 2.1) this.seq = { type: 'iris', t: 0, out: true };
+    } else if (s.type === 'iris') {
+      if (s.out && s.t >= 0.5) { this.loadLevel(this.lv.n + 1); this.seq = { type: 'iris', t: 0, out: false }; this.levelBanner(); }
+      else if (!s.out && s.t >= 0.5) this.seq = null;
+    }
+  }
+  checkExit() {
+    const e = this.exit;
+    if (e.run || Math.hypot(this.p.x - e.x, this.p.y - e.y) > TILE * 2.3 || !this.los(this.p.x, this.p.y, e.x, e.y)) return;   // close AND in view, never through a wall
+    // the joke: he never gets in — the door grows legs and runs off to the next, harder level
+    const dx = e.x - this.p.x, dy = e.y - this.p.y, d = Math.hypot(dx, dy) || 1;
+    e.run = { vx: (dx / d) * 130, vy: (dy / d) * 130 - 40, dx: 0, dy: 0, t: 0 };
+    const bonus = 1000 * this.lv.n;
+    this.score += bonus; this.stats.reloc++;
+    this.banner = { title: '票數翻盤！', sub: '連任大門溜走了', t: 0, dur: 2.3, style: 'red' };
+    this.text(`+${bonus}`, e.x, e.y - 34, '#ffd45e', 1.6);
+    this.seq = { type: 'escape', t: 0 };
+    this.shake = 4; this.flash = 0.4; this.flashColor = '255,226,122';
+  }
+
+  // ── Critters ──
+  countRat(r) { if (!r.counted) { r.counted = true; this.stats.rats++; } }
+  updateRats(dt) {
+    const p = this.p, lv = this.lv;
+    for (let k = this.rats.length - 1; k >= 0; k--) {
+      const r = this.rats[k];
+      r.t += dt; r.flee = Math.max(0, r.flee - dt); r.cool = Math.max(0, r.cool - dt);
+      const d = Math.hypot(r.x - p.x, r.y - p.y);
+      if (r.mode !== 'wave' && r.flee <= 0 && d < 110 && this.inLight(r.x, r.y)) {
+        r.flee = 1.3; this.countRat(r);
+        for (let i = 0; i < 3; i++) this.particles.emit({ x: r.x, y: r.y + 2, vx: rand(-20, 20), vy: rand(-12, 0), drag: 4, life: 0.3, color: '#bdb6c8' });
+      }
+      const sp = r.mode === 'wave' ? 86 : r.flee > 0 ? 108 : r.kind === 'rat' ? 34 : 26;
+      this.stepTiles(r, sp * dt, (x, y, opts) => {
+        if (r.mode === 'wave') { let b = null, bd = 1e9; for (const o of opts) { const v = this.north[o[1] * lv.w + o[0]]; if (v >= 0 && v < bd) { bd = v; b = o; } } return b; }
+        if (r.flee > 0) { let b = null, bd = -1; for (const o of opts) { const v = Math.hypot(o[0] * TILE + 10 - p.x, o[1] * TILE + 10 - p.y); if (v > bd) { bd = v; b = o; } } return b; }
+        return null;
+      });
+      if (r.cool <= 0 && d < 9 && !this.seq) {
+        r.cool = 2.2; r.flee = 1; p.slowT = PLAYER.SLOW_TIME; this.countRat(r);
+        this.text(r.kind === 'rat' ? '噁！老鼠！' : '噁！蟑螂！', p.x, p.y - 32, '#e0b0ff', 1.1);
+        for (let i = 0; i < 6; i++) this.particles.emit({ x: p.x + rand(-4, 4), y: p.y + 2, vx: rand(-30, 30), vy: rand(-30, -5), drag: 3, life: 0.4, color: '#8a6a4a' });
+      }
+      if (r.mode === 'wave') {
+        r.life += dt;
+        const ti = r.ty * lv.w + r.tx;
+        if (this.north[ti] === 0 || r.life > 16) { this.rats.splice(k, 1); continue; }
+        if (d < 150) this.countRat(r);
+      }
+    }
+    if (this.rats.filter((r) => r.mode === 'roam').length < 5 + lv.n && Math.random() < dt * 0.25) this.addRat(false);
+  }
+  startRatWave() {
+    this.ratWarn = 1.3;
+    this.banner = { title: '南鼠北送！', sub: '鼠群從南邊湧上來了', t: 0, dur: 2.0, style: 'brown' };
+  }
+  spawnRatWave() {
+    const lv = this.lv, ptx = Math.floor(this.p.x / TILE), pty = Math.floor(this.p.y / TILE);
+    let pool = lv.floors.filter((i) => { const x = i % lv.w, y = (i / lv.w) | 0; return y >= pty + 4 && y <= pty + 9 && Math.abs(x - ptx) <= 9 && this.north[i] > 0; });
+    if (pool.length < 6) pool = lv.floors.filter((i) => ((i / lv.w) | 0) >= lv.h - 7 && this.north[i] > 0);
+    shuffle(pool).slice(0, 14).forEach((i) => this.addRat(true, i));
+  }
+
+  // ── Items & throwing ──
+  throwSquid() {
+    if (this.state !== 'playing' || this.seq || this.paused) return;
+    const p = this.p;
+    if (this.inv.squid <= 0) { this.text('沒有小卷了', p.x, p.y - 32, '#ffb0c8', 0.9); return; }
+    this.inv.squid--; this.stats.thrown++;
+    this.shots.push({ kind: 'squid', x: p.x + p.fx * 5, y: p.y + p.fy * 5, vx: p.fx * 175, vy: p.fy * 175, t: 0, z: 9 });
+  }
+  throwBerry() {
+    if (this.state !== 'playing' || this.seq || this.paused) return;
+    const p = this.p;
+    if (this.inv.berry <= 0) { this.text('沒有大藍莓了', p.x, p.y - 32, '#b9a0ff', 0.9); return; }
+    this.inv.berry--;
+    this.shots.push({ kind: 'berry', x: p.x + p.fx * 5, y: p.y + p.fy * 5, vx: p.fx * 120, vy: p.fy * 120, t: 0, z: 6 });
+  }
+  updateShots(dt) {
+    for (let k = this.shots.length - 1; k >= 0; k--) {
+      const s = this.shots[k];
+      s.t += dt;
+      const nx = s.x + s.vx * dt, ny = s.y + s.vy * dt;
+      if (s.kind === 'squid') {
+        if (this.solidAt(nx, ny) || s.t > 1.3) { this.splat(s.x, s.y, ['#3a3150', '#5b4f78', '#ff9ab8']); this.shots.splice(k, 1); continue; }
+        s.x = nx; s.y = ny;
+        const hit = this.chasers.find((c) => c.mode !== 'stun' && Math.abs(c.x - s.x) < 11 && s.y - c.y > -15 && s.y - c.y < 9);   // body-shaped: the sprite stands above its feet
+        if (hit) { this.stunChaser(hit); this.splat(s.x, s.y, ['#ff9ab8', '#ffc4d6', '#8fe07a']); this.shots.splice(k, 1); }
+      } else {
+        const DUR = 0.55;
+        if (this.solidAt(nx, ny) || s.t >= DUR) { this.berryBurst(s.x, s.y); this.shots.splice(k, 1); continue; }
+        s.x = nx; s.y = ny; s.z = 6 + Math.sin((s.t / DUR) * Math.PI) * 16;
+      }
+    }
+  }
+  splat(x, y, cols) {
+    for (let i = 0; i < 10; i++) { const a = rand(0, Math.PI * 2), sp = rand(15, 55); this.particles.emit({ x, y: y - 6, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, drag: 4, life: rand(0.3, 0.55), size: Math.random() < 0.4 ? 2 : 1, color: pick(cols) }); }
+  }
+  stunChaser(c) {
+    c.mode = 'stun'; c.modeT = 3; c.bubble = null; c.alertT = 0;
+    this.text('腸胃不適', c.x, c.y - 30, '#8fe07a', 1.4);
+    this.say(this.p, '沒有集體中毒！', 1.9, '#2f7a45');
+    this.score += 50; this.shake = 2;
+  }
+  berryBurst(x, y) {
+    this.rings.push({ x, y, t: 0, dur: 0.7, r: 110 });
+    for (let i = 0; i < 26; i++) { const a = rand(0, Math.PI * 2), sp = rand(30, 120); this.glints.emit({ x, y: y - 4, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, drag: 3, life: rand(0.4, 0.8), size: Math.random() < 0.5 ? 2 : 1, color: pick(['#5a62d6', '#8a93f0', '#eef0ff', '#b9a0ff']) }); }
+    let n = 0;
+    for (const c of this.chasers) {
+      if (Math.hypot(c.x - x, c.y - y) > 110) continue;
+      c.mode = 'argue'; c.modeT = 5; c.argueT = n * 0.55; c.argueFlip = n % 2 === 1; c.bubble = null; c.alertT = 0;
+      n++; this.score += 80;
+    }
+    this.text(n ? '吵起來了！' : '這是藍莓嗎？', x, y + 24, '#c9b4ff', 1.3);
+    this.shake = 3;
+  }
+  updateItems(dt) {
+    const p = this.p;
+    for (let k = this.items.length - 1; k >= 0; k--) {
+      const it = this.items[k];
+      it.t += dt; it.cd = Math.max(0, it.cd - dt);
+      if (Math.random() < dt * (it.kind === 'gold' ? 2.2 : 0.7)) this.glints.emit({ x: it.x + rand(-6, 6), y: it.y - 5 + rand(-6, 3), vy: -8, life: 0.6, color: it.kind === 'gold' ? '#ffe27a' : '#ffffff', size: 1 });
+      if (Math.hypot(it.x - p.x, it.y - p.y) > 11) continue;
+      if (this.collect(it)) {
+        this.items.splice(k, 1);
+        for (let i = 0; i < 10; i++) { const a = rand(0, Math.PI * 2), sp = rand(20, 60); this.glints.emit({ x: it.x, y: it.y - 5, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 10, drag: 3, life: rand(0.3, 0.6), color: pick(['#ffffff', '#ffe27a']) }); }
+      }
+    }
+  }
+  collect(it) {
+    const say = (s, c) => this.text(s, it.x, it.y - 24, c, 1.3);
+    switch (it.kind) {
+      case 'squid': if (this.inv.squid >= 9) return false; this.inv.squid++; this.score += 20; say('+小卷', '#ffb0c8'); return true;
+      case 'berry': if (this.inv.berry >= 3) return false; this.inv.berry++; this.score += 40; say('+大藍莓', '#c9b4ff'); return true;
+      case 'gold': this.stats.berries++; this.levelGold++; this.score += 500; say('特級大果藍莓！', '#ffd45e'); this.flash = 0.25; this.flashColor = '255,226,122'; return true;
+      case 'phone': if (this.inv.save > 0) return false; this.inv.save = 1; say('首長救駕 待命', '#9cc8ff'); return true;
+      case 'milk':
+        if (this.milkTaken) { if (it.cd <= 0) { it.cd = 2.2; say('每週限領一瓶', '#ffffff'); } return false; }
+        if (it.fake) { say('忘記兌換…', '#cfc8e0'); this.splat(it.x, it.y, ['#d9d6e2', '#aaa4b6']); return true; }
+        this.milkTaken = true; this.battery = 100; this.score += 30;
+        say('鮮奶充電！', '#ffffff'); this.toast('每週限領一瓶', '#bfe6ff');
+        this.flash = 0.3; this.flashColor = '255,255,255';
+        return true;
+    }
+    return false;
+  }
+
+  // ── Timed city events: tree removal, 南鼠北送 ──
+  cutInterval() { return Math.max(14, 26 - this.lv.n * 1.5); }
+  updateEvents(dt) {
+    if (!this.debug.noEvents) {
+      if ((this.cutT -= dt) <= 0) { this.cutT = this.cutInterval(); this.startCut(); }
+      if ((this.ratWaveT -= dt) <= 0) { this.ratWaveT = rand(38, 52); this.startRatWave(); }
+    }
+    if (this.ratWarn > 0 && (this.ratWarn -= dt) <= 0) this.spawnRatWave();
+    for (let k = this.cuts.length - 1; k >= 0; k--) {
+      const c = this.cuts[k];
+      c.t += dt;
+      if (c.t < 0) continue;
+      const cx = c.x * TILE + 10, cy = c.y * TILE + 10;
+      if (Math.random() < dt * 34) this.particles.emit({ x: cx + rand(-6, 6), y: cy + rand(-8, 4), vx: rand(-50, 50), vy: rand(-60, -10), g: 160, life: rand(0.3, 0.6), size: Math.random() < 0.4 ? 2 : 1, color: pick(['#c8935a', '#8a5a2c', '#52a95c', '#86d477']) });
+      if (Math.random() < dt * 20) this.glints.emit({ x: cx + rand(-3, 3), y: cy + 2, vx: rand(-40, 40), vy: rand(-40, -10), g: 100, life: 0.25, color: '#ffd84a' });
+      if (c.t >= 1.2) {
+        this.lv.t[c.i] = T_UMB;
+        this.repaintAround(c.x, c.y);
+        this.stats.trees++; this.dirtyFields = true;
+        for (let i = 0; i < 12; i++) this.particles.emit({ x: cx + rand(-8, 8), y: cy + rand(-8, 6), vx: rand(-30, 30), vy: rand(-30, 0), drag: 3, life: 0.5, color: pick(['#e6e0f0', '#2fb5ad', '#ffffff']) });
+        this.text('744萬遮陽傘', cx, cy - 16, '#ffd45e', 1.8);
+        this.cuts.splice(k, 1);
+        if (!this.cuts.length) this.toast(`移除 ${this.stats.trees} 棵、補植 ${Math.floor((this.stats.trees * TREES.REPLANTED) / TREES.REMOVED)} 棵`, '#a8e89a');
+      }
+    }
+  }
+  startCut(maxN) {
+    const lv = this.lv, ptx = this.p.x / TILE, pty = this.p.y / TILE;
+    const trees = [];
+    for (let i = 0; i < lv.t.length; i++) if (lv.t[i] === T_TREE && !this.cuts.some((c) => c.i === i)) trees.push(i);
+    if (!trees.length) return 0;
+    const dist = (i) => Math.hypot((i % lv.w) + 0.5 - ptx, ((i / lv.w) | 0) + 0.5 - pty);
+    trees.sort((a, b) => dist(a) - dist(b));
+    const near = trees.filter((i) => dist(i) < 9), pool = near.length ? near : trees;
+    const k = Math.min(pool.length, maxN || (2 + (lv.n >= 4 ? 1 : 0)));
+    pool.slice(0, k).forEach((i, j) => this.cuts.push({ i, x: i % lv.w, y: (i / lv.w) | 0, t: -j * 0.3 }));
+    this.toast('行道樹移除作業中…', '#a8e89a');
+    return k;
+  }
+
+  // ── Feedback ──
+  text(str, x, y, color, dur = 1.2) { this.texts.push({ str, x, y, color, t: 0, dur }); }
+  toast(text, color = '#ffffff') { this.toasts.push({ text, color, t: 0 }); if (this.toasts.length > 3) this.toasts.shift(); }
+  updateFx(dt) {
+    this.particles.update(dt); this.glints.update(dt);
+    for (let i = this.texts.length - 1; i >= 0; i--) if ((this.texts[i].t += dt) > this.texts[i].dur) this.texts.splice(i, 1);
+    for (let i = this.toasts.length - 1; i >= 0; i--) if ((this.toasts[i].t += dt) > 2.6) this.toasts.splice(i, 1);
+    if (this.banner && (this.banner.t += dt) > this.banner.dur) this.banner = null;
+    for (let i = this.rings.length - 1; i >= 0; i--) if ((this.rings[i].t += dt) > this.rings[i].dur) this.rings.splice(i, 1);
+    if (this.p.bubble && (this.p.bubble.t -= dt) <= 0) this.p.bubble = null;
+    const m = this.minion;
+    if (m) {
+      if (m.bubble && (m.bubble.t -= dt) <= 0) m.bubble = null;
+      if (m.leaving) { m.lt += dt; m.x -= m.face * 110 * dt; m.z = Math.abs(Math.sin(m.lt * 12)) * 3; if (m.lt > 1.1) this.minion = null; }
+    }
+    this.alarmLevel = approach(this.alarmLevel, this.alarm && this.state === 'playing' && !this.seq ? 1 : 0, dt * 3);
+  }
+  saveHi() {
+    const s = Math.floor(this.score);
+    if (s > this.hi) { this.newBest = this.hi > 0; this.hi = s; localStorage.setItem(STORAGE_HI, String(s)); }
+  }
+  /** The only ending: the 市政成績單 with a big 敗選 stamp. */
+  endGame() {
+    if (this.state === 'over') return;
+    this.score = Math.floor(this.score);
+    this.saveHi();
+    this.state = 'over'; this.stateT = 0; this.paused = false; this.banner = null; this.seq = null; this.alarm = false;
+    this.acceptAt = null; this.stamped = false; this.cardFx.clear();
+  }
+  updateEnd(dt) {
+    const T = this.stateT;
+    if (!this.stamped && T >= CARD.STAMP + CARD.SLAM) {
+      this.stamped = true; this.shake = 5;
+      const c = this.cardLayout();
+      for (let i = 0; i < 26; i++) {
+        const a = rand(0, Math.PI * 2), r = rand(26, 40);
+        this.cardFx.emit({ x: c.stampX + Math.cos(a) * r, y: c.stampY + Math.sin(a) * r * 0.6, vx: Math.cos(a) * rand(20, 60), vy: Math.sin(a) * rand(15, 40), drag: 4, life: rand(0.3, 0.6), size: Math.random() < 0.4 ? 2 : 1, color: pick(['#d8343f', '#f08a8f', '#ffffff']) });
+      }
+    }
+    if (this.acceptAt === null && T >= CARD.LOCK) this.acceptAt = performance.now();
+    this.cardFx.update(dt);
+  }
+  updateCamera(dt, now = false) {
+    const p = this.p, lv = this.lv, mw = lv.w * TILE, mh = lv.h * TILE, vh = VIEW_H - HUD_H;
+    let tx = p.x + p.fx * 18 - VIEW_W / 2, ty = p.y + p.fy * 12 - HUD_H - vh / 2;
+    tx = mw <= VIEW_W ? (mw - VIEW_W) / 2 : clamp(tx, 0, mw - VIEW_W);
+    ty = mh <= vh ? (mh - vh) / 2 - HUD_H : clamp(ty, -HUD_H, mh - VIEW_H);
+    const k = now ? 1 : Math.min(1, dt * 5);
+    this.cam.x += (tx - this.cam.x) * k; this.cam.y += (ty - this.cam.y) * k;
+  }
+
+  // ──────────────────────────── 9. RENDERING ────────────────────────────
+  render() {
+    const ctx = this.ctx;
+    ctx.setTransform(PX, 0, 0, PX, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#1b1932'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.save();
+    if (this.shake > 0) ctx.translate(snap(rand(-1, 1) * this.shake * 0.5), snap(rand(-1, 1) * this.shake * 0.5));
+    this.drawWorld(ctx);
+    ctx.restore();
+    if (this.flash > 0) { ctx.fillStyle = `rgba(${this.flashColor},${this.flash * 0.45})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
+    if (this.state === 'playing') {
+      if (this.alarmLevel > 0) { ctx.globalAlpha = this.alarmLevel * (0.55 + 0.3 * Math.sin(this.time * 8)); ctx.drawImage(this.vignette, 0, 0); ctx.globalAlpha = 1; }
+      if (!this.seq || this.seq.type !== 'iris') this.drawArrows(ctx);
+      this.drawHud(ctx);
+      this.drawToasts(ctx);
+      if (this.input.touchUI) this.drawTouch(ctx);
+      if (this.seq && this.seq.type === 'caught') this.drawCaught(ctx);
+      if (this.banner) this.drawBanner(ctx);
+      if (this.seq && this.seq.type === 'iris') this.drawIris(ctx);
+    }
+    if (this.state === 'title') this.drawTitle(ctx);
+    if (this.state === 'over') { this.drawHud(ctx); this.drawCard(ctx); }
+    if (this.paused) this.drawPause(ctx);
+  }
+
+  drawWorld(ctx) {
+    const ox = Math.round(this.cam.x * PX) / PX, oy = Math.round(this.cam.y * PX) / PX;
+    this.ox = ox; this.oy = oy;
+    const m = this.mapC, sx = clamp(Math.floor(ox), 0, m.width), sy = clamp(Math.floor(oy), 0, m.height);
+    const sw = Math.min(VIEW_W + 2, m.width - sx), sh = Math.min(VIEW_H + 2, m.height - sy);
+    if (sw > 0 && sh > 0) ctx.drawImage(m, sx, sy, sw, sh, sx - ox, sy - oy, sw, sh);
+    // trees being cut: the tile trembles and a little chainsaw buzzes at the trunk
+    for (const c of this.cuts) {
+      if (c.t < 0) continue;
+      const px = c.x * TILE, py = c.y * TILE, j = Math.round(Math.sin(this.time * 70));
+      ctx.drawImage(m, px, py, TILE, TILE, px - ox + j, py - oy, TILE, TILE);
+      const bx = px - ox + 13, by = py - oy + 13 + Math.round(Math.sin(this.time * 50));
+      ctx.fillStyle = PAL.ink; ctx.fillRect(bx - 1, by - 1, 9, 5);
+      ctx.fillStyle = '#ff8a3a'; ctx.fillRect(bx, by, 4, 3); ctx.fillStyle = '#d8d4e4'; ctx.fillRect(bx + 4, by + 1, 3, 1);
+    }
+    // 大藍莓 shockwave rings on the ground
+    for (const r of this.rings) {
+      const k = r.t / r.dur, rad = easeOutCubic(k) * r.r;
+      ctx.strokeStyle = `rgba(150,130,255,${(1 - k) * 0.9})`; ctx.lineWidth = 3 * (1 - k) + 1;
+      ctx.beginPath(); ctx.arc(r.x - ox, r.y - oy, rad, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = `rgba(255,255,255,${(1 - k) * 0.7})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(r.x - ox, r.y - oy, rad * 0.8, 0, Math.PI * 2); ctx.stroke();
+    }
+    // y-sorted actors
+    const list = [];
+    for (const it of this.items) list.push([it.y, () => this.drawItem(ctx, it, ox, oy)]);
+    list.push([this.exit.y + (this.exit.run ? this.exit.run.dy : 0), () => this.drawExit(ctx, ox, oy)]);
+    for (const r of this.rats) list.push([r.y, () => this.drawRat(ctx, r, ox, oy)]);
+    for (const c of this.chasers) list.push([c.y, () => this.drawChaser(ctx, c, ox, oy)]);
+    list.push([this.p.y, () => this.drawPlayer(ctx, ox, oy)]);
+    if (this.minion) list.push([this.minion.y, () => this.drawMinion(ctx, ox, oy)]);
+    for (const s of this.shots) list.push([s.y, () => this.drawShot(ctx, s, ox, oy)]);
+    list.sort((a, b) => a[0] - b[0]);
+    for (const [, fn] of list) fn();
+    this.particles.draw(ctx, ox, oy);
+    this.drawDarkness(ctx, ox, oy);
+    this.drawOverlays(ctx, ox, oy);
+  }
+  shadow(ctx, x, y, w = 12) {
+    ctx.fillStyle = 'rgba(20,16,40,0.32)';
+    ctx.fillRect(snap(x - w / 2 + 1), snap(y), w - 2, 1); ctx.fillRect(snap(x - w / 2), snap(y + 1), w, 1); ctx.fillRect(snap(x - w / 2 + 1), snap(y + 2), w - 2, 1);
+  }
+  put(ctx, s, x, y) { ctx.drawImage(s.canvas, snap(x - s.w / 2), snap(y - s.h)); }
+  drawPlayer(ctx, ox, oy) {
+    const p = this.p, x = p.x - ox, y = p.y - oy + FEET, sq = this.seq ? this.seq.type : '';
+    this.shadow(ctx, x, y - 1);
+    if (p.invuln > 0 && !this.seq && this.state === 'playing' && Math.floor(this.time * 12) % 2 === 0) ctx.globalAlpha = 0.35;
+    let set;
+    if (sq === 'ko') set = MX.player.ko;
+    else if (sq === 'caught' || p.sweatT > 0) set = MX.player.sweat[p.moving ? Math.floor(p.anim) % 4 : 1];
+    else if (!p.moving && p.blinkT < 0.13) set = MX.player.blink;
+    else set = MX.player.walk[p.moving ? Math.floor(p.anim) % 4 : 1];
+    const s = p.face > 0 ? set.r : set.l;
+    this.put(ctx, s, x, y + (sq === 'caught' ? Math.round(Math.sin(this.time * 40)) : 0));
+    ctx.globalAlpha = 1;
+  }
+  chaserSprite(c) {
+    const C = MX.chars[c.kind];
+    let set;
+    if (c.mode === 'stun') set = C.dizzy;
+    else if (c.mode === 'argue') set = C.argue[Math.floor(this.time * 3 + c.jit) % 2];
+    else if (c.mode === 'chase') set = C.chase[Math.floor(c.anim * 8) % 2];
+    else set = this.state === 'over' || (this.seq && this.seq.type !== 'iris') ? C.walk[1] : C.walk[Math.floor(c.anim * 6) % 4];
+    return c.face > 0 ? set.r : set.l;
+  }
+  drawChaser(ctx, c, ox, oy) {
+    const x = c.x - ox, y = c.y - oy + FEET;
+    if (x < -30 || y < -10 || x > VIEW_W + 30 || y > VIEW_H + 40) { c.spr = null; return; }
+    this.shadow(ctx, x, y - 1);
+    const s = this.chaserSprite(c);
+    const hop = c.mode === 'chase' ? Math.round(Math.abs(Math.sin(c.anim * 12))) : 0;
+    c.spr = s; c.sx = snap(x - s.w / 2); c.sy = snap(y - s.h - hop);
+    ctx.drawImage(s.canvas, c.sx, c.sy);
+  }
+  drawRat(ctx, r, ox, oy) {
+    const x = r.x - ox, y = r.y - oy + 3;
+    if (x < -10 || y < -10 || x > VIEW_W + 10 || y > VIEW_H + 10) return;
+    const fr = (r.kind === 'rat' ? MX.rat : MX.roach)[Math.floor(r.t * (r.flee > 0 || r.mode === 'wave' ? 18 : 8)) % 2];
+    this.put(ctx, r.face > 0 ? fr.r : fr.l, x + Math.round(Math.sin(r.t * 9 + r.tx) * 1), y);
+  }
+  drawItem(ctx, it, ox, oy) {
+    const x = it.x - ox, y = it.y - oy + 4;
+    if (x < -16 || y < -16 || x > VIEW_W + 16 || y > VIEW_H + 24) return;
+    const bob = Math.round(Math.sin(it.t * 3) * 1.5);
+    this.shadow(ctx, x, y - 1, 10);
+    let s = { squid: MX.squid, berry: MX.bigBerry, gold: MX.goldBerry, phone: MX.phone, milk: MX.milk }[it.kind];
+    if (it.kind === 'milk' && this.milkTaken) s = MX.milkGrey;
+    if (it.kind === 'gold') {                                      // a slow golden halo for the collectible
+      ctx.fillStyle = `rgba(255,226,122,${0.25 + 0.15 * Math.sin(it.t * 4)})`;
+      ctx.fillRect(snap(x - 7), snap(y - 15 + bob), 14, 12); ctx.fillRect(snap(x - 5), snap(y - 17 + bob), 10, 16);
+    }
+    this.put(ctx, s, x, y - 1 + bob);
+  }
+  drawShot(ctx, s, ox, oy) {
+    const x = s.x - ox, y = s.y - oy + 3;
+    this.shadow(ctx, x, y - 1, 8);
+    if (s.kind === 'squid') this.put(ctx, MX.squidSpin[Math.floor(s.t * 16) % 4], x, y - s.z + 4);
+    else this.put(ctx, MX.bigBerry, x, y - s.z + 4);
+  }
+  drawMinion(ctx, ox, oy) {
+    const m = this.minion, x = m.x - ox, y = m.y - oy + FEET;
+    this.shadow(ctx, x, y - 1);
+    const set = MX.chief[m.landed && !m.leaving ? 1 : 0];
+    this.put(ctx, m.face > 0 ? set.r : set.l, x, y - m.z);
+  }
+  drawExit(ctx, ox, oy) {
+    const e = this.exit, r = e.run;
+    let x = e.x - ox, y = e.y - oy + FEET;
+    if (r) { x += r.dx; y += r.dy - Math.abs(Math.sin(r.t * 14)) * 4; }
+    if (x < -40 || y < -40 || x > VIEW_W + 40 || y > VIEW_H + 40) return;
+    x = Math.round(x); y = Math.round(y);
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 3);
+    // golden rays
+    ctx.save();
+    ctx.globalAlpha = 0.18 + 0.12 * pulse; ctx.fillStyle = '#ffe27a';
+    for (let i = 0; i < 8; i++) {
+      const a = this.time * 0.6 + (i * Math.PI) / 4;
+      ctx.beginPath(); ctx.moveTo(x, y - 12);
+      ctx.lineTo(x + Math.cos(a - 0.12) * 30, y - 12 + Math.sin(a - 0.12) * 30); ctx.lineTo(x + Math.cos(a + 0.12) * 30, y - 12 + Math.sin(a + 0.12) * 30);
+      ctx.fill();
+    }
+    ctx.restore();
+    // little legs when it runs off
+    if (r) {
+      const k = Math.floor(r.t * 16) % 2;
+      ctx.fillStyle = PAL.ink;
+      ctx.fillRect(x - 5, y - 2, 2, 4 + k); ctx.fillRect(x + 3, y - 2, 2, 5 - k);
+      ctx.fillRect(x - 7 + k, y + 2 + k, 4, 2); ctx.fillRect(x + 3 - k, y + 3 - k, 4, 2);
+    }
+    // the door
+    const dx = x - 9, dy = y - 24;
+    pixelRect(ctx, dx - 1, dy - 1, 20, 25, PAL.ink);
+    pixelRect(ctx, dx, dy, 18, 23, '#f2c14e');
+    ctx.fillStyle = '#c8902e'; ctx.fillRect(dx + 2, dy + 3, 6, 18); ctx.fillRect(dx + 10, dy + 3, 6, 18);
+    ctx.fillStyle = '#e0a83e'; ctx.fillRect(dx + 3, dy + 5, 4, 6); ctx.fillRect(dx + 11, dy + 5, 4, 6); ctx.fillRect(dx + 3, dy + 13, 4, 6); ctx.fillRect(dx + 11, dy + 13, 4, 6);
+    ctx.fillStyle = '#fff1a8'; ctx.fillRect(dx + 7, dy + 12, 1, 2); ctx.fillRect(dx + 10, dy + 12, 1, 2); ctx.fillRect(dx + 1, dy + 1, 16, 1);
+    // red sign board: 連任
+    const L = layoutCJK('連任', 10, 'bold'), sw = L.w + 10, sh = L.h + 6, sx = x - Math.round(sw / 2), sy = dy - sh - 2;
+    pixelRect(ctx, sx - 1, sy - 1, sw + 2, sh + 2, PAL.ink);
+    pixelRect(ctx, sx, sy, sw, sh, '#d8343f');
+    ctx.fillStyle = '#f2c14e'; ctx.fillRect(sx + 1, sy + 1, sw - 2, 1); ctx.fillRect(sx + 1, sy + sh - 2, sw - 2, 1);
+    drawLayout(ctx, L, x, sy + 3, { align: 'center', color: '#fff3c4' });
+  }
+
+  /** ~50% blue veil everywhere, punched out by the torch beam, its glow, street lamps and the door. */
+  drawDarkness(ctx, ox, oy) {
+    const g = this.lightG, L = this.light;
+    g.globalCompositeOperation = 'source-over';
+    g.clearRect(0, 0, VIEW_W, VIEW_H);
+    g.fillStyle = `rgba(${LIGHT.TINT},${LIGHT.DARK})`; g.fillRect(0, 0, VIEW_W, VIEW_H);
+    g.globalCompositeOperation = 'destination-out';
+    const hole = (x, y, r, a, inner = 0.35) => {
+      if (x < -r || y < -r || x > VIEW_W + r || y > VIEW_H + r) return;
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, `rgba(0,0,0,${a})`); gr.addColorStop(inner, `rgba(0,0,0,${a})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    };
+    for (const l of this.lv.lamps) hole(l.x * TILE + 4 - ox, l.y * TILE + 11 - oy, 40, 0.6 + 0.06 * Math.sin(this.time * 2 + l.ph), 0.3);
+    const e = this.exit;
+    hole(e.x + (e.run ? e.run.dx : 0) - ox, e.y + (e.run ? e.run.dy : 0) - oy - 8, 50, 0.9, 0.45);
+    for (const r of this.rings) hole(r.x - ox, r.y - oy, easeOutCubic(r.t / r.dur) * r.r, 0.5 * (1 - r.t / r.dur), 0.6);
+    if (L) {
+      const px = L.x - ox, py = L.y - oy;
+      hole(px, py - 4, LIGHT.AURA, 0.95, 0.5);
+      if (L.on > 0) {
+        const gr = g.createRadialGradient(px, py, 2, px, py, L.range);
+        gr.addColorStop(0, `rgba(0,0,0,${L.on})`); gr.addColorStop(0.74, `rgba(0,0,0,${L.on})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = gr; g.beginPath(); g.moveTo(px, py);
+        for (const [x, y] of L.poly) g.lineTo(x - ox, y - oy);
+        g.closePath(); g.fill();
+      }
+    }
+    g.globalCompositeOperation = 'source-over';
+    ctx.drawImage(this.lightC, 0, 0);
+    if (L && L.on > 0.5) {                                          // a warm cast inside the beam
+      ctx.save(); ctx.globalAlpha = 0.11 * L.on; ctx.fillStyle = '#ffe9a8';
+      ctx.beginPath(); ctx.moveTo(L.x - ox, L.y - oy); for (const [x, y] of L.poly) ctx.lineTo(x - ox, y - oy); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  /** Everything that must read clearly regardless of light: rims, marks, bubbles, floating text. */
+  drawOverlays(ctx, ox, oy) {
+    const playing = this.state === 'playing';
+    for (const c of this.chasers) {
+      if (!c.spr) continue;
+      const lit = this.inLight(c.x, c.y - 6) || this.nearLamp(c.x, c.y);
+      if (lit && !c.boss) continue;
+      const col = c.boss ? '#ff5a5a' : c.mode === 'chase' ? '#ff9a8a' : '#d4dcff';
+      ctx.globalAlpha = lit ? 0.75 : 0.9;
+      const R = MX.rim(c.spr, col);
+      ctx.drawImage(R.canvas, c.sx - 1, c.sy - 1);
+      ctx.globalAlpha = 1;
+    }
+    this.glints.draw(ctx, ox, oy);
+    for (const c of this.chasers) {
+      if (!c.spr) continue;
+      const hx = c.x - ox, top = c.sy;
+      if (c.mode === 'stun') {
+        for (let i = 0; i < 3; i++) {
+          const a = this.time * 5 + i * 2.1, sx = snap(hx + Math.cos(a) * 8), sy = snap(top + 2 + Math.sin(a) * 2.5);
+          ctx.fillStyle = i === 1 ? '#8fe07a' : PAL.star; ctx.fillRect(sx - 1, sy, 3, 1); ctx.fillRect(sx, sy - 1, 1, 3);
+        }
+      }
+      if (playing && c.alertT > 0) {
+        const k = clamp((0.9 - c.alertT) / 0.15, 0, 1), sc = k < 1 ? 1 + (1 - k) : 1;
+        drawZh(ctx, '！', hx + 9, Math.max(HUD_H + 2, top - 6 - Math.round(Math.sin(this.time * 20) * 1)), { size: 14, weight: '900', color: '#ff4a4a', outline: '#ffffff', scale: sc, align: 'center' });
+      } else if (c.markT > 0) drawZh(ctx, c.mark, hx + 9, Math.max(HUD_H + 2, top - 6), { size: 12, weight: 'bold', color: '#d4dcff', outline: PAL.ink, align: 'center', alpha: clamp(c.markT * 3, 0, 1) });
+      if (c.bubble) this.drawBubble(ctx, c.bubble, hx, top - 1);
+    }
+    const p = this.p;
+    if (p.bubble) this.drawBubble(ctx, p.bubble, p.x - ox, p.y - oy + FEET - 26);
+    if (this.minion && this.minion.bubble) this.drawBubble(ctx, this.minion.bubble, this.minion.x - ox, this.minion.y - oy + FEET - 26 - this.minion.z);
+    if (playing && p.sweatT > 0 && !this.seq) {
+      const k = (this.time * 2) % 1;
+      ctx.fillStyle = '#8fd3ff';
+      ctx.fillRect(snap(p.x - ox + (p.face > 0 ? -9 : 8)), snap(p.y - oy - 14 + k * 6), 1, 2);
+    }
+    for (const t of this.texts) {
+      const k = t.t / t.dur, a = k > 0.75 ? (1 - k) / 0.25 : 1, latin = /^[\x20-\x7e]+$/.test(t.str);
+      const hw = (latin ? textWidth(t.str) : zhWidth(t.str, 11, 'bold')) / 2 + 3;
+      const x = clamp(t.x - ox, hw, VIEW_W - hw), y = Math.max(HUD_H + 3, t.y - oy - easeOutCubic(Math.min(1, k * 1.6)) * 10);
+      if (latin) drawText(ctx, t.str, x, y, { align: 'center', color: t.color, outline: PAL.ink, alpha: a });
+      else drawZh(ctx, t.str, x, y, { size: 11, weight: 'bold', align: 'center', color: t.color, outline: PAL.ink, alpha: a });
+    }
+  }
+  drawBubble(ctx, b, cx, bottom) {
+    const s = MX.bubble(b.text, b.color);
+    const x = clamp(Math.round(cx - s.w / 2), 2, VIEW_W - s.w - 2), y = Math.max(HUD_H + 2, Math.round(bottom - s.h));
+    ctx.globalAlpha = clamp(b.t * 6, 0, 1);
+    blit(ctx, s, x, y);
+    ctx.globalAlpha = 1;
+  }
+
+  /** Off-screen pointers: red for anyone chasing, pale for wanderers nearby, gold for the 連任 door. */
+  drawArrows(ctx) {
+    const ox = this.ox, oy = this.oy, px = this.p.x - ox, py = this.p.y - oy;
+    const x0 = 10, y0 = HUD_H + 10, x1 = VIEW_W - 10, y1 = VIEW_H - 10;
+    const marks = [];
+    for (const c of this.chasers) {
+      const sx = c.x - ox, sy = c.y - oy;
+      if (sx > -4 && sy > HUD_H - 6 && sx < VIEW_W + 4 && sy < VIEW_H + 14) continue;
+      const d = Math.hypot(c.x - this.p.x, c.y - this.p.y);
+      if (c.mode === 'chase') marks.push({ sx, sy, col: '#ff4a4a', size: 6, label: '！', lc: '#ffffff' });
+      else if (d < TILE * 10) marks.push({ sx, sy, col: c.boss ? '#ff9a8a' : '#c8d0f0', size: 4, alpha: 0.7 });
+    }
+    const e = this.exit;
+    if (!e.run) {
+      const sx = e.x - ox, sy = e.y - oy;
+      if (!(sx > 0 && sy > HUD_H && sx < VIEW_W && sy < VIEW_H)) marks.push({ sx, sy, col: '#ffd45e', size: 6, label: '連任', lc: '#ffd45e', door: true });
+    }
+    for (const m of marks) {
+      const dx = m.sx - px, dy = m.sy - py, a = Math.atan2(dy, dx);
+      let t = Infinity;
+      if (dx > 0) t = Math.min(t, (x1 - px) / dx); if (dx < 0) t = Math.min(t, (x0 - px) / dx);
+      if (dy > 0) t = Math.min(t, (y1 - py) / dy); if (dy < 0) t = Math.min(t, (y0 - py) / dy);
+      if (!isFinite(t)) continue;
+      const ax = px + dx * t, ay = py + dy * t, pulse = m.label ? 1 + 0.25 * Math.sin(this.time * 10) : 1, s = m.size * pulse;
+      ctx.save();
+      ctx.globalAlpha = m.alpha || 1;
+      ctx.translate(ax, ay); ctx.rotate(a);
+      ctx.fillStyle = PAL.ink;
+      ctx.beginPath(); ctx.moveTo(s + 2, 0); ctx.lineTo(-s, -s - 1); ctx.lineTo(-s * 0.4, 0); ctx.lineTo(-s, s + 1); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = m.col;
+      ctx.beginPath(); ctx.moveTo(s, 0); ctx.lineTo(-s + 1, -s + 0.5); ctx.lineTo(-s * 0.4 + 0.5, 0); ctx.lineTo(-s + 1, s - 0.5); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      if (m.label) {
+        const lx = ax - Math.cos(a) * (m.door ? 22 : 13), ly = ay - Math.sin(a) * (m.door ? 12 : 11) - 6;
+        drawZh(ctx, m.label, clamp(lx, 16, VIEW_W - 16), clamp(ly, HUD_H + 2, VIEW_H - 14), { size: m.door ? 10 : 11, weight: '900', align: 'center', color: m.lc, outline: PAL.ink });
+      }
+    }
+  }
+
+  drawHud(ctx) {
+    ctx.fillStyle = 'rgba(18,17,40,0.84)'; ctx.fillRect(0, 0, VIEW_W, HUD_H);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(0, HUD_H, VIEW_W, 1);
+    for (let i = 0; i < PLAYER.LIVES; i++) ctx.drawImage((i < this.lives ? MX.heart : MX.heartEmpty).canvas, 4 + i * 10, 5);
+    // torch battery = a bottle of 鮮奶
+    const b = this.battery, bw = 32, fill = Math.round((bw * b) / 100);
+    ctx.drawImage(MX.milk.canvas, 37, 3);
+    pixelRect(ctx, 46, 6, bw + 2, 7, PAL.ink);
+    ctx.fillStyle = '#3a3656'; ctx.fillRect(47, 7, bw, 5);
+    let col = b > 50 ? '#7fe08a' : b > 20 ? '#ffd45e' : '#ff6b6b';
+    if (b <= 20 && Math.sin(this.time * 10) > 0) col = '#ffffff';
+    ctx.fillStyle = col; ctx.fillRect(47, 7, fill, 5);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(47, 7, fill, 1);
+    // level & place
+    const lvT = `第${this.lv.n}關`;
+    drawZh(ctx, lvT, 86, 3, { size: 11, weight: 'bold', color: '#ffd45e' });
+    drawZh(ctx, this.lv.place, 90 + zhWidth(lvT, 11, 'bold'), 3, { size: 11, weight: 'bold', color: '#e8e4f6' });
+    // votes
+    drawZh(ctx, '得票', 208, 3, { size: 11, weight: 'bold', color: '#a9a4c4' });
+    drawText(ctx, String(Math.floor(this.score)).padStart(6, '0'), 234, 5, { color: '#ffffff' });
+    // inventory, right to left: 3 berry slots, hotline, 大藍莓, 小卷
+    let x = VIEW_W - 13;
+    for (let i = 2; i >= 0; i--, x -= 11) { ctx.globalAlpha = i < this.levelGold ? 1 : 0.28; ctx.drawImage(MX.goldBerry.canvas, x, 4); }
+    ctx.globalAlpha = this.inv.save ? 1 : 0.28; x -= 6; ctx.drawImage(MX.phone.canvas, x, 5); ctx.globalAlpha = 1;
+    x -= 26; ctx.drawImage(MX.bigBerry.canvas, x, 3); drawText(ctx, String(this.inv.berry), x + 15, 6, { color: this.inv.berry ? '#ffffff' : '#6e6a88' });
+    x -= 24; ctx.drawImage(MX.squid.canvas, x, 3); drawText(ctx, String(this.inv.squid), x + 13, 6, { color: this.inv.squid ? '#ffffff' : '#6e6a88' });
+  }
+  drawToasts(ctx) {
+    this.toasts.forEach((t, i) => {
+      const a = Math.min(1, t.t * 5, (2.6 - t.t) * 3), w = zhWidth(t.text, 11, 'bold') + 14, y = VIEW_H - 21 - i * 17 + Math.round((1 - Math.min(1, t.t * 6)) * 6);   // bottom centre: never covers the chasers' bubbles up top
+      ctx.globalAlpha = a * 0.85; pixelRect(ctx, Math.round(VIEW_W / 2 - w / 2), y, Math.round(w), 15, 'rgba(18,17,40,0.85)'); ctx.globalAlpha = 1;
+      drawZh(ctx, t.text, VIEW_W / 2, y + 2, { size: 11, weight: 'bold', align: 'center', color: t.color, alpha: a });
+    });
+  }
+  drawTouch(ctx) {
+    const j = this.input.joy;
+    if (j) {
+      ctx.globalAlpha = 0.35; ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(j.ox, j.oy, 16, 0, Math.PI * 2); ctx.fill();
+      const dx = j.x - j.ox, dy = j.y - j.oy, d = Math.hypot(dx, dy), k = d > 16 ? 16 / d : 1;
+      ctx.globalAlpha = 0.7; ctx.beginPath(); ctx.arc(j.ox + dx * k, j.oy + dy * k, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    for (const b of this.touchButtons()) {
+      ctx.globalAlpha = 0.55; ctx.fillStyle = PAL.ink; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 0.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+      if (b.id === 'pause') { ctx.fillStyle = '#ffffff'; ctx.fillRect(b.x - 3, b.y - 3, 2, 6); ctx.fillRect(b.x + 1, b.y - 3, 2, 6); continue; }
+      const s = b.id === 'squid' ? MX.squid : MX.bigBerry, n = this.inv[b.id];
+      ctx.globalAlpha = n ? 1 : 0.4; ctx.drawImage(s.canvas, Math.round(b.x - s.w / 2), Math.round(b.y - s.h / 2)); ctx.globalAlpha = 1;
+      drawText(ctx, String(n), b.x + b.r - 6, b.y + b.r - 8, { color: '#ffffff', outline: PAL.ink });
+    }
+  }
+  drawBanner(ctx) {
+    const B = this.banner, t = B.t, inK = easeOutBack(clamp(t / 0.3, 0, 1)), outK = clamp((B.dur - t) / 0.3, 0, 1);
+    const cy = 78, h = 46, y = cy - h / 2, slide = Math.round((1 - inK) * -VIEW_W + (1 - outK) * VIEW_W);
+    const C = { gold: ['#2b2a5a', '#ffd45e'], red: ['#a8232e', '#ffd45e'], brown: ['#5a3a2a', '#ffb07a'] }[B.style] || ['#2b2a5a', '#ffd45e'];
+    ctx.save(); ctx.translate(slide, 0);
+    ctx.globalAlpha = 0.92; ctx.fillStyle = C[0]; ctx.fillRect(0, y, VIEW_W, h); ctx.globalAlpha = 1;
+    ctx.fillStyle = C[1]; ctx.fillRect(0, y, VIEW_W, 2); ctx.fillRect(0, y + h - 2, VIEW_W, 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(0, y + 2, VIEW_W, 1);
+    drawZh(ctx, B.title, VIEW_W / 2, y + 6, { size: 18, weight: '900', align: 'center', color: C[1], outline: PAL.ink, shadow: 'rgba(0,0,0,0.35)' });
+    if (B.sub) drawZh(ctx, B.sub, VIEW_W / 2, y + 29, { size: 11, weight: 'bold', align: 'center', color: '#ffffff' });
+    ctx.restore();
+  }
+  /** 當場被問倒！ — sweating 萬安 and a tablet that is forever 載入中… */
+  drawCaught(ctx) {
+    const t = this.seq.t, e = easeOutBack(clamp(t / 0.3, 0, 1)), a = Math.min(1, t * 5) * clamp((2.0 - t) / 0.25, 0, 1);
+    const W = 228, H = 98, x = Math.round((VIEW_W - W) / 2), y = Math.round(56 + (1 - e) * 18);
+    ctx.save(); ctx.globalAlpha = a;
+    pixelRect(ctx, x + 2, y + 3, W, H, 'rgba(0,0,0,0.35)');
+    pixelRect(ctx, x, y, W, H, PAL.ink); pixelRect(ctx, x + 1, y + 1, W - 2, H - 2, PAL.cream);
+    ctx.fillStyle = '#d8343f'; ctx.fillRect(x + 1, y + 1, W - 2, 26);
+    ctx.fillStyle = '#f2c14e'; ctx.fillRect(x + 1, y + 27, W - 2, 1);
+    drawZh(ctx, '當場被問倒！', x + W / 2, y + 5, { size: 16, weight: '900', align: 'center', color: '#ffffff', outline: '#7a1e26' });
+    // the face, 3× and shaking a little
+    const f = MX.faceSweat, fx = x + 14 + Math.round(Math.sin(this.time * 38)), fy = y + 36;
+    ctx.drawImage(f.canvas, fx, fy, f.w * 3, f.h * 3);
+    const dk = (t * 1.6) % 1;
+    ctx.fillStyle = '#8fd3ff'; ctx.fillRect(fx + 52, fy + 10 + Math.round(dk * 12), 2, 4); ctx.fillRect(fx - 4, fy + 16 + Math.round(((dk + 0.5) % 1) * 12), 2, 3);
+    // the tablet
+    const tx = x + 82, ty = y + 36, tw = 132, th = 54;
+    pixelRect(ctx, tx, ty, tw, th, PAL.ink);
+    pixelRect(ctx, tx + 3, ty + 3, tw - 6, th - 6, '#e3f1ff');
+    ctx.fillStyle = '#5b5675'; ctx.fillRect(tx + tw - 2, ty + th / 2 - 3, 1, 6);
+    const cx = tx + 22, cy = ty + 22;
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2, on = (Math.floor(t * 10) % 8) === i;
+      ctx.fillStyle = on ? '#3c7fd9' : '#b8cbe6';
+      ctx.fillRect(Math.round(cx + Math.cos(ang) * 7) - 1, Math.round(cy + Math.sin(ang) * 7) - 1, 3, 3);
+    }
+    drawZh(ctx, '載入中…', tx + 40, ty + 14, { size: 13, weight: 'bold', color: '#2f4f86' });
+    const pk = Math.min(0.99, easeOutCubic(clamp(t / 1.1, 0, 1)) * 0.99);
+    pixelRect(ctx, tx + 10, ty + 38, tw - 20, 7, '#9fb6d8');
+    ctx.fillStyle = '#3c7fd9'; ctx.fillRect(tx + 11, ty + 39, Math.round((tw - 22) * pk), 5);
+    drawText(ctx, `${Math.round(pk * 100)}`, tx + tw - 12, ty + 28, { align: 'right', color: '#2f4f86' });
+    ctx.restore();
+  }
+  drawIris(ctx) {
+    const s = this.seq, k = clamp(s.t / 0.5, 0, 1), r = (s.out ? 1 - easeOutCubic(k) : easeOutCubic(k)) * 260;
+    const px = this.p.x - this.ox, py = this.p.y - this.oy;
+    ctx.fillStyle = '#15132b';
+    ctx.beginPath(); ctx.rect(0, 0, VIEW_W, VIEW_H); ctx.arc(px, py, Math.max(0.5, r), 0, Math.PI * 2, true); ctx.fill('evenodd');
+  }
+  drawPause(ctx) {
+    ctx.fillStyle = 'rgba(10,8,25,0.55)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    drawZh(ctx, '暫停', VIEW_W / 2, 82, { size: 24, weight: '900', align: 'center', color: '#ffffff', outline: PAL.ink });
+    drawZh(ctx, '按 P、空白鍵或點一下繼續', VIEW_W / 2, 118, { size: 12, weight: 'bold', align: 'center', color: '#ffffff', alpha: 0.75 + 0.25 * Math.sin(this.time * 4) });
+  }
+
+  panel(ctx, x, y, w, h) {
+    pixelRect(ctx, x + 1, y + 2, w, h, 'rgba(0,0,0,0.35)');
+    pixelRect(ctx, x, y, w, h, 'rgba(255,255,255,0.22)');
+    pixelRect(ctx, x + 1, y + 1, w - 2, h - 2, 'rgba(20,18,46,0.86)');
+  }
+  drawMiniDoor(ctx, x, y) {
+    pixelRect(ctx, x - 1, y + 3, 12, 13, PAL.ink); pixelRect(ctx, x, y + 4, 10, 11, '#f2c14e');
+    ctx.fillStyle = '#c8902e'; ctx.fillRect(x + 1, y + 6, 3, 8); ctx.fillRect(x + 6, y + 6, 3, 8);
+    pixelRect(ctx, x - 2, y - 1, 14, 5, PAL.ink); ctx.fillStyle = '#d8343f'; ctx.fillRect(x - 1, y, 12, 3);
+  }
+  drawTitle(ctx) {
+    ctx.fillStyle = 'rgba(14,16,40,0.34)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    const bob = Math.round(Math.sin(this.time * 2.2) * 1.2);
+    drawZh(ctx, '萬安心驚驚', VIEW_W / 2, 7 + bob, { pixel: true, size: 16, weight: '900', scale: 2, align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.5)' });
+    drawZh(ctx, '手電筒迷宮大逃亡・連任大門在哪裡？', VIEW_W / 2, 47, { size: 12, weight: 'bold', align: 'center', color: '#ffffff', outline: PAL.ink });
+    // left: who's after you
+    this.panel(ctx, 8, 66, 188, 104);
+    drawZh(ctx, '議員追兵', 16, 71, { size: 11, weight: 'bold', color: '#ff9a8a' });
+    const cast = ['wang', 'jian', 'he', 'xu', 'boss'];
+    cast.forEach((k, i) => {
+      const cx = 28 + i * 37, by = 126, set = MX.chars[k].walk[Math.floor(this.time * 5 + i) % 4], s = set.r;
+      this.shadow(ctx, cx, by - 1);
+      this.put(ctx, s, cx, by);
+      drawZh(ctx, NAMES[k], cx, by + 4, { size: 10, weight: 'bold', align: 'center', color: k === 'boss' ? '#ff8a8a' : '#ffffff' });
+      if (k === 'boss') drawZh(ctx, '魔王', cx, by - 34, { size: 10, weight: '900', align: 'center', color: '#ff5a5a', outline: PAL.ink });
+    });
+    drawZh(ctx, '被看見就衝過來質詢！', 102, 153, { size: 10, weight: 'bold', align: 'center', color: '#ffb0a0' });
+    // right: items
+    this.panel(ctx, 204, 66, 188, 104);
+    drawZh(ctx, '道具', 212, 71, { size: 11, weight: 'bold', color: '#a8e89a' });
+    const items = [
+      [MX.squid, '小卷', '擊暈 3 秒'], [MX.bigBerry, '大藍莓', '讓追兵吵架'],
+      [MX.milk, '鮮奶', '手電筒電池'], [MX.phone, '首長救駕', '擋一次質詢'],
+      [MX.goldBerry, '特級大果藍莓', '每關 3 顆'], [null, '連任', '找到它…？'],
+    ];
+    items.forEach(([s, name, desc], i) => {
+      const cx = 216 + (i % 2) * 90, cy = 90 + Math.floor(i / 2) * 26;
+      if (s) ctx.drawImage(s.canvas, Math.round(cx - s.w / 2), Math.round(cy + 6 - s.h / 2)); else this.drawMiniDoor(ctx, cx - 5, cy - 2);
+      drawZh(ctx, name, cx + 10, cy - 2, { size: 11, weight: 'bold', color: '#ffffff' });
+      drawZh(ctx, desc, cx + 10, cy + 11, { size: 10, color: '#c8c4dc' });
+    });
+    this.panel(ctx, 8, 174, 384, 28);
+    drawZh(ctx, '方向鍵 / WASD 移動・空白鍵 / J 丟小卷・K 丟大藍莓・P 暫停', VIEW_W / 2, 177, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
+    drawZh(ctx, '手機：左側拖曳移動・右下按鈕丟道具・點一下開始', VIEW_W / 2, 189, { size: 10, align: 'center', color: '#c8c4dc' });
+    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, 208, '#ffffff', 1, this.time % 1.1 < 0.18, true);
+    if (this.hi > 0) drawText(ctx, 'HI ' + String(this.hi).padStart(6, '0'), VIEW_W - 6, 5, { align: 'right', color: '#ffe9a8', outline: PAL.ink });
+  }
+
+  cardLayout() {
+    const W = 316, H = 208, x = Math.round((VIEW_W - W) / 2), y = 8;
+    return { W, H, x, y, cx: x + W / 2, stampX: x + 258, stampY: y + 82 };
+  }
+  /** 市政成績單: the year in review, row by row, then the 敗選 stamp slams down. */
+  drawCard(ctx) {
+    const T = this.stateT, t = clamp(T / CARD.IN, 0, 1);
+    ctx.fillStyle = `rgba(14,16,40,${0.55 * Math.min(1, t * 1.5)})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    if (t <= 0) return;
+    const L = this.cardLayout(), e = easeOutBack(t);
+    const shx = this.shake > 0 ? snap(rand(-1, 1) * this.shake * 0.6) : 0, shy = this.shake > 0 ? snap(rand(-1, 1) * this.shake * 0.6) : 0;
+    const { W, H } = L, x = L.x + shx, y = Math.round(L.y + (1 - e) * 24) + shy, cx = x + W / 2, stX = L.stampX + shx, stY = y + (L.stampY - L.y);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, t * 2);
+    pixelRect(ctx, x + 2, y + 3, W, H, 'rgba(0,0,0,0.4)');
+    pixelRect(ctx, x, y, W, H, PAL.ink);
+    pixelRect(ctx, x + 1, y + 1, W - 2, H - 2, '#fffaf0');
+    ctx.fillStyle = '#c8414b'; ctx.fillRect(x + 1, y + 1, W - 2, 22);
+    ctx.fillStyle = '#f2c14e'; ctx.fillRect(x + 1, y + 23, W - 2, 1);
+    drawZh(ctx, '市政成績單', cx, y + 5, { size: 13, weight: '900', align: 'center', color: '#fff3d6', outline: '#7a1e26' });
+    drawZh(ctx, '臺北市', x + 9, y + 6, { size: 10, weight: 'bold', color: '#ffd9c4' });
+    drawZh(ctx, `市長 ${NAMES.player}`, x + W - 9, y + 6, { size: 10, weight: 'bold', color: '#ffd9c4', align: 'right' });
+    const s = this.stats, repl = Math.floor((s.trees * TREES.REPLANTED) / TREES.REMOVED);
+    const rows = [
+      ['連任大門溜走', s.reloc, '次', '差一點點'],
+      ['被質詢問倒', s.caught, '次', '載入中…'],
+      ['小卷投擲', s.thrown, '個', '沒有集體中毒'],
+      ['砍樹', s.trees, '棵', `補植 ${repl} 棵`],
+      ['遇到鼠蟑', s.rats, '隻', '南鼠北送'],
+      ['特級大果藍莓', s.berries, '顆', '這是藍莓嗎？'],
+      ['首長救駕', s.saves, '次', '局長代答'],
+    ];
+    rows.forEach(([label, v, unit, note], i) => {
+      const at = CARD.ROW0 + i * CARD.ROW_DT;
+      if (T < at) return;
+      const ry = y + 29 + i * 15, fresh = clamp(1 - (T - at) / 0.3, 0, 1);
+      if (fresh > 0) { ctx.fillStyle = `rgba(255,212,94,${fresh * 0.5})`; ctx.fillRect(x + 6, ry - 1, 200, 14); }
+      drawZh(ctx, label, x + 12, ry, { size: 11, weight: 'bold', color: PAL.ink });
+      drawText(ctx, String(v), x + 122, ry + 2, { align: 'right', color: '#c8414b' });
+      drawZh(ctx, unit, x + 125, ry, { size: 10, color: '#6e6680' });
+      drawZh(ctx, note, x + 142, ry + 1, { size: 10, color: '#9a90aa' });
+      ctx.fillStyle = '#efe4cc'; ctx.fillRect(x + 8, ry + 13, 198, 1);
+    });
+    // 總評 box with the stamp
+    ctx.strokeStyle = '#e2d2b4'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+    ctx.strokeRect(x + 214.5, y + 30.5, W - 222, 106); ctx.setLineDash([]);
+    drawZh(ctx, '總評', stX, y + 34, { size: 10, weight: 'bold', color: '#a297ad', align: 'center' });
+    const st = T - CARD.STAMP;
+    if (st >= 0) {
+      const S = MX.stamp, f = st / CARD.SLAM, z = f < 1 / 3 ? 3 : f < 2 / 3 ? 2 : 1;
+      ctx.globalAlpha = f < 1 ? 0.55 + 0.15 * z : 0.95;
+      ctx.drawImage(S.canvas, Math.round(stX - (S.w * z) / 2), Math.round(stY - (S.h * z) / 2), S.w * z, S.h * z);
+      ctx.globalAlpha = Math.min(1, t * 2);
+    } else if (T >= CARD.ROW0 && Math.sin(this.time * 8) > -0.2) drawZh(ctx, '評分中…', stX, stY - 6, { size: 11, align: 'center', color: '#a297ad' });
+    if (this.stamped) {
+      const qa = clamp((st - CARD.SLAM) * 4, 0, 1);
+      drawZh(ctx, '明年再戰！', stX, y + 112, { size: 12, weight: 'bold', align: 'center', color: '#c8414b', alpha: qa });
+      drawZh(ctx, `止步第 ${this.lv.n} 關`, stX, y + 127, { size: 10, align: 'center', color: '#8a7f98', alpha: qa });
+    }
+    ctx.fillStyle = '#eadcc0'; ctx.fillRect(x + 10, y + 142, W - 20, 1);
+    const colL = cx - 72, colR = cx + 72;
+    drawZh(ctx, '得票數', colL, y + 147, { size: 10, weight: 'bold', align: 'center', color: '#a297ad' });
+    drawText(ctx, String(Math.floor(this.score)).padStart(6, '0'), colL, y + 161, { align: 'center', color: PAL.ink, scale: 2 });
+    if (this.newBest) drawZh(ctx, '新紀錄！', colR, y + 147, { size: 10, weight: 'bold', align: 'center', color: Math.sin(this.time * 9) > -0.3 ? PAL.gold : '#d98c1e' });
+    else drawZh(ctx, '歷史最高票', colR, y + 147, { size: 10, weight: 'bold', align: 'center', color: '#a297ad' });
+    drawText(ctx, String(this.hi).padStart(6, '0'), colR, y + 161, { align: 'center', color: PAL.ink, scale: 2 });
+    ctx.restore();
+    if (this.acceptAt !== null) {
+      const a = Math.min(1, (T - CARD.LOCK) * 3);
+      drawPrompt(ctx, '按', '空白鍵', '再戰連任', cx, y + 186, PAL.ink, a, this.time % 1.1 < 0.18);
+    }
+    this.cardFx.draw(ctx);
+  }
+}
+
+// ────────────────────────────── 10. BOOT ──────────────────────────────
+const canvas = document.getElementById('game');
+const game = new Game(canvas);
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const maxW = window.innerWidth - 16, maxH = window.innerHeight - 16;
+  PX = Math.max(1, Math.floor(Math.min((maxW * dpr) / VIEW_W, (maxH * dpr) / VIEW_H)));
+  canvas.width = VIEW_W * PX; canvas.height = VIEW_H * PX;
+  canvas.style.width = `${(VIEW_W * PX) / dpr}px`; canvas.style.height = `${(VIEW_H * PX) / dpr}px`;
+  game.render();
+}
+window.addEventListener('resize', resize);
+resize();
+canvas.focus();
+
+let last = performance.now();
+let crashed = 0;
+function frame(now) {
+  requestAnimationFrame(frame);             // schedule first: one bad frame must never stop the game
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  last = now;
+  try { game.update(dt); game.render(); }
+  catch (err) { if (crashed++ < 3) console.error(err); }
+}
+requestAnimationFrame(frame);
+
+// Debug / test hooks.
+const tc = (tx, ty) => ({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 });
+window.wananMaze = {
+  game, MX, SPR, TILE,
+  teleport(tx, ty) { const c = tc(tx, ty); game.p.x = c.x; game.p.y = c.y; game.updateFields(); game.updateCamera(0, true); game.computeLight(); },
+  face(dx, dy) { const p = game.p; p.fx = dx; p.fy = dy; p.ang = Math.atan2(dy, dx); if (dx) p.face = dx > 0 ? 1 : -1; game.computeLight(); },
+  tileOf(x, y) { return [Math.floor(x / TILE), Math.floor(y / TILE)]; },
+  solid(tx, ty) { return game.solidTile(tx, ty); },
+  spawnChaser(kind, tx, ty) { const c = game.makeChaser(kind, tx, ty); game.chasers.push(c); return game.chasers.length - 1; },
+  clearChasers() { game.chasers = []; },
+  give(kind, n) { game.inv[kind] = n; },
+  setBattery(v) { game.battery = v; },
+  cutTrees(n) { return game.startCut(n); },
+  ratWave() { game.startRatWave(); },
+  /** A straight corridor run of `len` open tiles from the player, in any of the 4 directions. */
+  corridor(len) {
+    const [px, py] = this.tileOf(game.p.x, game.p.y);
+    for (const [dx, dy] of DIRS4) { let k = 1; while (k <= len && !game.solidTile(px + dx * k, py + dy * k)) k++; if (k > len) return { dx, dy, tx: px + dx * len, ty: py + dy * len }; }
+    return null;
+  },
+  /** Teleport to a tile `d` steps (BFS) from the 連任 door. */
+  nearExit(d) {
+    const lv = game.lv, f = bfs(lv, [lv.exit.y * lv.w + lv.exit.x]);
+    const i = f.findIndex((v) => v === d);
+    if (i >= 0) this.teleport(i % lv.w, (i / lv.w) | 0);
+    return i >= 0;
+  },
+  pathToExit() { const lv = game.lv; return bfs(lv, [lv.exit.y * lv.w + lv.exit.x]); },
+  findTile(pred) { const lv = game.lv; for (let y = 0; y < lv.h; y++) for (let x = 0; x < lv.w; x++) if (pred(x, y, lv.t[y * lv.w + x])) return [x, y]; return null; },
+};
+})();
+</script>
+</body>
+</html>
