@@ -3350,9 +3350,12 @@ class Game {
     }
     if (c.said) {
       const a = clamp((c.t - 0.9) * 3, 0, 1);
-      // speech bubble for the line
+      // speech bubble for the short beat
       this.drawBubble(ctx, { text: '上當了吧！', t: 2, color: '#2a5aaa' }, x - 10, y - spr.h - 8, []);
-      drawZh(ctx, ENDER_LINE, VIEW_W / 2, VIEW_H - 28, { align: 'center', color: '#ffffff', outline: PAL.ink, weight: 'bold', size: 11, alpha: a });
+      // Just below ender feet (y≈130), above wet 萬安 head (~BASE_Y - spr.h ≈ 170).
+      const ly = 140;
+      ctx.globalAlpha = 0.8 * a; pixelRect(ctx, 6, ly - 3, VIEW_W - 12, 20, 'rgba(18,17,40,0.92)'); ctx.globalAlpha = 1;
+      drawZh(ctx, ENDER_LINE, VIEW_W / 2, ly, { align: 'center', color: '#ffffff', outline: PAL.ink, weight: 'bold', size: 11, alpha: a });
     }
     if (this.fxBoss) this.fxBoss.draw(ctx);
   }
@@ -3388,9 +3391,10 @@ class Game {
   /** Second page after title: illustrated how-to, readable on mobile + desktop. */
   drawHelp(ctx) {
     ctx.fillStyle = 'rgba(12,14,36,0.55)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    drawZh(ctx, '玩法說明', VIEW_W / 2, 4, { size: 14, weight: '900', align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.45)' });
-    this.panel(ctx, 6, 22, VIEW_W - 12, 170);
-    // Compact 2-col rows: sprite + one-line effect
+    drawZh(ctx, '玩法說明', VIEW_W / 2, 2, { size: 13, weight: '900', align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.45)' });
+    // Panel holds list + controls; start prompt sits alone well below the panel edge.
+    const panX = 6, panY = 17, panW = VIEW_W - 12, panH = 162;
+    this.panel(ctx, panX, panY, panW, panH);
     const rows = [
       [MX.milk, '鮮奶', '補手電筒電力（有假的）', '#bfe6ff'],
       [MX.squid, '小卷', '丟出・議員跑廁所停 3 秒', '#ffb0c8'],
@@ -3402,32 +3406,34 @@ class Game {
       [null, '連任門', '關卡目標（但會跑掉）', '#ffd45e'],
       [MX.rat[0].r, '老鼠／蟑螂', '踩到腳滑減速！', '#e0b0ff'],
     ];
-    const colW = 188, x0 = 14, y0 = 28;
+    const colW = 188, x0 = 14, y0 = panY + 4, rowH = 23;
     rows.forEach((row, i) => {
       const col = i < 5 ? 0 : 1, ri = i < 5 ? i : i - 5;
-      const x = x0 + col * colW, y = y0 + ri * 28;
+      const x = x0 + col * colW, y = y0 + ri * rowH;
       const [spr, name, desc, colr] = row;
-      // icon slot
-      ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, 22, 22);
+      ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, 20, 20);
       if (spr) {
-        const sc = Math.min(1, 18 / Math.max(spr.w, spr.h));
-        ctx.drawImage(spr.canvas, Math.round(x + 11 - (spr.w * sc) / 2), Math.round(y + 11 - (spr.h * sc) / 2), Math.round(spr.w * sc), Math.round(spr.h * sc));
+        const sc = Math.min(1, 16 / Math.max(spr.w, spr.h));
+        ctx.drawImage(spr.canvas, Math.round(x + 10 - (spr.w * sc) / 2), Math.round(y + 10 - (spr.h * sc) / 2), Math.round(spr.w * sc), Math.round(spr.h * sc));
       } else if (name === '洋流') {
-        ctx.fillStyle = '#4aa3f0'; ctx.beginPath(); ctx.arc(x + 11, y + 11, 7, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#bfe8ff'; ctx.beginPath(); ctx.arc(x + 8, y + 9, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#4aa3f0'; ctx.beginPath(); ctx.arc(x + 10, y + 10, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#bfe8ff'; ctx.beginPath(); ctx.arc(x + 7, y + 8, 2.5, 0, Math.PI * 2); ctx.fill();
       } else if (name === '樹') {
-        ctx.fillStyle = '#2a6b3a'; ctx.fillRect(x + 9, y + 14, 4, 6);
-        ctx.fillStyle = '#52a95c'; ctx.beginPath(); ctx.arc(x + 11, y + 10, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#2a6b3a'; ctx.fillRect(x + 8, y + 12, 4, 6);
+        ctx.fillStyle = '#52a95c'; ctx.beginPath(); ctx.arc(x + 10, y + 9, 6, 0, Math.PI * 2); ctx.fill();
       } else if (name === '連任門') {
-        this.drawMiniDoor(ctx, x + 5, y + 2);
+        this.drawMiniDoor(ctx, x + 4, y + 1);
       }
-      drawZh(ctx, name, x + 26, y + 1, { size: 11, weight: '900', color: colr });
-      drawZh(ctx, desc, x + 26, y + 13, { size: 10, weight: 'bold', color: '#e8e4f6' });
+      drawZh(ctx, name, x + 24, y, { size: 11, weight: '900', color: colr });
+      drawZh(ctx, desc, x + 24, y + 11, { size: 10, weight: 'bold', color: '#e8e4f6' });
     });
-    // controls
-    drawZh(ctx, '操作：方向鍵／WASD 移動・空白鍵丟道具／按住砍樹', VIEW_W / 2, 194, { size: 10, weight: 'bold', align: 'center', color: '#ffffff', outline: PAL.ink });
-    drawZh(ctx, '手機：左拖曳・右下按鈕點＝丟、按住＝砍', VIEW_W / 2, 205, { size: 10, align: 'center', color: '#d8d4ec', outline: PAL.ink });
-    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, 212, '#ffffff', 1, this.time % 1.1 < 0.18, true);
+    // Controls in the free bottom-right under 老鼠／蟑螂 (right col), not under the start prompt.
+    const cx = x0 + colW, cy = y0 + 4 * rowH;   // aligns with left「議員」row / below「老鼠」
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(cx - 2, cy - 1, colW - 4, 26);
+    drawZh(ctx, '操作：方向鍵／WASD・空白鍵丟／按住砍', cx + colW / 2 - 4, cy, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
+    drawZh(ctx, '手機：左拖曳・右下點＝丟、按住＝砍', cx + colW / 2 - 4, cy + 12, { size: 10, align: 'center', color: '#d0cce4' });
+    // Start prompt alone below panel — panel ends at panY+panH (=179); prompt at 208 leaves ≥20px clear.
+    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, 208, '#ffffff', 1, this.time % 1.1 < 0.18, true);
   }
 
   drawTitle(ctx) {
