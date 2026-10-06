@@ -64,7 +64,7 @@ const ENDERS = ['lu', 'han', 'zheng'];   // 盧秀燕 / 韓國瑜 / 鄭麗文 �
 const ENDER_NAMES = { lu: '盧媽媽', han: '韓國瑜', zheng: '鄭麗文' };
 const ENDER_LINE = '上當了吧！繼續當你的台北市長，2028是我的！';
 /** Maze 洋流 hazard: warn → rush along path toward 萬安. Faster than chasers; squid/berry only briefly slow it. */
-const CURRENT = { WARN: 1.15, LIFE: 5.2, SPEED: 98, SLOW: 0.45, SLOW_T: 0.9, HIT: 11, INTERVAL: [16, 24], INTERVAL_LV: 1.6 };
+const CURRENT = { WARN: 1.15, LIFE: 5.2, SPEED: 81, SLOW: 0.45, SLOW_T: 0.9, HIT: 11, INTERVAL: [16, 24], INTERVAL_LV: 1.6 };
 /** Player-chopped street trees: hold Space ~2.4s while adjacent & facing. */
 const TREE = { MAX_HP: 2.4, RANGE: 1 };
 
@@ -816,8 +816,6 @@ const MX = (() => {
   const squidSpin = []; for (let i = 0, r = SQUID_ROWS; i < 4; i++, r = rot(r)) squidSpin.push(makeSprite(r, SQ_PAL));
   const BERRY_PAL = { B: '#5a62d6', b: '#8a93f0', W: '#eef0ff', d: '#3a3f9e', k: '#2e3270', g: '#4f8f5a' };
   const bigBerry = makeSprite(['   k k k', '    kkk', '  BBBBBBB', ' BBbBBBBBB', 'BBbWBBBBBBB', 'BBbBBBBBBBB', 'BBBBBBBBBBB', 'BBBBBBBBBdB', ' BBBBBBBdB', '  BBBBBdB', '    BBB'], BERRY_PAL);
-  // 特級大果藍莓: a plump berry with a gold rim — the shiny collectible
-  const goldBerry = makeSprite(['  k k k', '   kkk', ' BBBBBBB', 'BbWBBBBBB', 'BbBBBBBBB', 'BBBBBBBdB', 'BBBBBBdBB', ' BBBBBBB', '   BBB'], BERRY_PAL, '#f2c14e');
   const BOTTLE_PAL = { c: '#d8344a', C: '#ff7a8a', W: '#ffffff', h: '#cfe6fb', b: '#3c7fd9', w: '#ffffff' };
   const milk = makeSprite(['  cc', ' cCCc', '  WW', ' WWWh', 'WWWWWh', 'bbbbbb', 'bwbwbb', 'bbbbbb', 'WWWWWh', 'WWWWWh', ' WWWh'], BOTTLE_PAL);
   const milkGrey = makeSprite(['  cc', ' cCCc', '  WW', ' WWWh', 'WWWWWh', 'bbbbbb', 'bwbwbb', 'bbbbbb', 'WWWWWh', 'WWWWWh', ' WWWh'], { c: '#8d879a', C: '#aaa4b6', W: '#d9d6e2', h: '#c4c0d0', b: '#8d879a', w: '#d9d6e2' });
@@ -1051,7 +1049,7 @@ const MX = (() => {
   const stampWin = makeStamp('當選', '#d8343f', -0.13);
   const stamp2028 = makeStamp('2028 沒你的份', '#2a5aaa', -0.1);
 
-  return { player, faceSweat, chars, chief, squid, squidSpin, bigBerry, goldBerry, milk, milkGrey, phone, rat, roach, heart, heartEmpty, bubble, stamp, stampWin, stamp2028, rim,
+  return { player, faceSweat, chars, chief, squid, squidSpin, bigBerry, milk, milkGrey, phone, rat, roach, heart, heartEmpty, bubble, stamp, stampWin, stamp2028, rim,
     muzzle, miniWave, mic, flyer, bian, bossSpr, cannon, ender, bucket };
 })();
 
@@ -1445,12 +1443,12 @@ class Game {
     this.baseSeed = demo ? 20260 : (Math.random() * 1e9) | 0;
     this.score = 0; this.lives = PLAYER.LIVES; this.battery = 100;
     this.inv = { squid: 1, berry: 0, save: 0 };
-    this.stats = { reloc: 0, caught: 0, thrown: 0, trees: 0, rats: 0, berries: 0, saves: 0 };
+    this.stats = { reloc: 0, caught: 0, thrown: 0, trees: 0, rats: 0, saves: 0 };
     this.newBest = false; this.acceptAt = null; this.stamped = false; this.cardFx.clear();
     this.seq = null; this.banner = null; this.toasts = []; this.alarm = false; this.alarmLevel = 0;
     this.bossReached = false; this.diedInBoss = false; this.boss = null; this.bp = null; this.cold = null;
     this.surviveT = 0; this.surviveDone = false;
-    this.tips = { milk: 0, squid: 0, berry: 0, phone: 0, gold: 0, rat: 0, current: 0, tree: 0, chaser: 0 };
+    this.tips = { milk: 0, squid: 0, berry: 0, phone: 0, rat: 0, current: 0, tree: 0, chaser: 0 };
     this.loadLevel(1);
   }
   start() {
@@ -1472,7 +1470,7 @@ class Game {
     this.currents = []; this.currentT = rand(...CURRENT.INTERVAL) * (0.55 + 0.1 * Math.random());
     this.currentWarnFlash = 0; this.treeHp = {}; this.chopping = false; this.chopTarget = null;
     this.particles.clear(); this.glints.clear();
-    this.milkTaken = false; this.levelGold = 0;
+    this.milkTaken = false;
     this.placeItems(); this.spawnChasers(); this.spawnRats();
     this.ratWaveT = n >= 2 ? rand(16, 24) : Infinity; this.ratWarn = 0;
     this.dirtyFields = true; this.updateFields();
@@ -1585,11 +1583,6 @@ class Game {
     const lv = this.lv, n = lv.n, used = new Set([lv.exit.y * lv.w + lv.exit.x, lv.start.y * lv.w + lv.start.x]);
     this.items = [];
     const add = (kind, i, extra = {}) => { if (i >= 0) this.items.push({ kind, x: (i % lv.w) * TILE + TILE / 2, y: ((i / lv.w) | 0) * TILE + TILE / 2, t: Math.random() * 6, cd: 0, vis: 0, ...extra }); };
-    for (let k = 0; k < 3; k++) {                               // 特級大果藍莓 hide in dead ends
-      let i = this.pickSpread(lv.deadEnds, used, 6, 6);
-      if (i < 0) i = this.pickSpread(lv.floors, used, 6, 6);
-      add('gold', i);
-    }
     for (let k = 0; k < 4 + Math.min(4, n >> 1); k++) add('squid', this.pickSpread(lv.floors, used, 3));
     for (let k = 0; k < (n >= 2 ? 2 : 1); k++) if (Math.random() < 0.85) add('berry', this.pickSpread(lv.floors, used, 7));
     const milks = n >= 3 ? 3 : 2, fake = Math.random() < 0.7 ? randInt(0, milks - 1) : -1;
@@ -2031,7 +2024,7 @@ class Game {
       it.t += dt; it.cd = Math.max(0, it.cd - dt);
       this.updateVis(it, it.x, it.y - 4, dt);
       // Sparkles only when the item is actually visible — no free giveaways in the dark.
-      if (it.vis > 0.35 && Math.random() < dt * (it.kind === 'gold' ? 2.2 : 0.7)) this.glints.emit({ x: it.x + rand(-6, 6), y: it.y - 5 + rand(-6, 3), vy: -8, life: 0.6, color: it.kind === 'gold' ? '#ffe27a' : '#ffffff', size: 1 });
+      if (it.vis > 0.35 && Math.random() < dt * 0.7) this.glints.emit({ x: it.x + rand(-6, 6), y: it.y - 5 + rand(-6, 3), vy: -8, life: 0.6, color: '#ffffff', size: 1 });
       if (Math.hypot(it.x - p.x, it.y - p.y) > 11) continue;
       if (this.collect(it)) {
         this.items.splice(k, 1);
@@ -2051,11 +2044,6 @@ class Game {
         if (this.inv.berry >= 3) return false;
         this.inv.berry++; this.score += 40; say('+大藍莓', '#c9b4ff');
         this.tipOnce('berry', '附近人多時空白鍵會丟大藍莓吵架', '#c9b4ff');
-        return true;
-      case 'gold':
-        this.stats.berries++; this.levelGold++; this.score += 500; say('特級大果藍莓！', '#ffd45e');
-        this.flash = 0.25; this.flashColor = '255,226,122';
-        this.tipOnce('gold', '特級大果藍莓・高分收藏！', '#ffd45e');
         return true;
       case 'phone':
         if (this.inv.save > 0) return false;
@@ -2844,12 +2832,8 @@ class Game {
     const bob = Math.round(Math.sin(it.t * 3) * 1.5);
     ctx.globalAlpha = clamp(vis, 0, 1);
     this.shadow(ctx, x, y - 1, 10);
-    let s = { squid: MX.squid, berry: MX.bigBerry, gold: MX.goldBerry, phone: MX.phone, milk: MX.milk }[it.kind];
+    let s = { squid: MX.squid, berry: MX.bigBerry, phone: MX.phone, milk: MX.milk }[it.kind];
     if (it.kind === 'milk' && this.milkTaken) s = MX.milkGrey;
-    if (it.kind === 'gold') {
-      ctx.fillStyle = `rgba(255,226,122,${(0.25 + 0.15 * Math.sin(it.t * 4)) * vis})`;
-      ctx.fillRect(snap(x - 7), snap(y - 15 + bob), 14, 12); ctx.fillRect(snap(x - 5), snap(y - 17 + bob), 10, 16);
-    }
     this.put(ctx, s, x, y - 1 + bob);
     ctx.globalAlpha = 1;
   }
@@ -3089,10 +3073,10 @@ class Game {
     // votes
     drawZh(ctx, '得票', 208, 3, { size: 11, weight: 'bold', color: '#a9a4c4' });
     drawText(ctx, String(Math.floor(this.score)).padStart(6, '0'), 234, 5, { color: '#ffffff' });
-    // inventory, right to left: 3 berry slots, hotline, 大藍莓, 小卷
+    // inventory, right to left: hotline, 大藍莓, 小卷
     let x = VIEW_W - 13;
-    for (let i = 2; i >= 0; i--, x -= 11) { ctx.globalAlpha = i < this.levelGold ? 1 : 0.28; ctx.drawImage(MX.goldBerry.canvas, x, 4); }
-    ctx.globalAlpha = this.inv.save ? 1 : 0.28; x -= 6; ctx.drawImage(MX.phone.canvas, x, 5); ctx.globalAlpha = 1;
+    ctx.globalAlpha = this.inv.save ? 1 : 0.28; ctx.drawImage(MX.phone.canvas, x, 5); ctx.globalAlpha = 1;
+    x -= 6;
     x -= 26; ctx.drawImage(MX.bigBerry.canvas, x, 3); drawText(ctx, String(this.inv.berry), x + 15, 6, { color: this.inv.berry ? '#ffffff' : '#6e6a88' });
     x -= 24; ctx.drawImage(MX.squid.canvas, x, 3); drawText(ctx, String(this.inv.squid), x + 13, 6, { color: this.inv.squid ? '#ffffff' : '#6e6a88' });
   }
@@ -3459,7 +3443,7 @@ class Game {
     const items = [
       [MX.squid, '小卷', '擊暈 3 秒'], [MX.bigBerry, '大藍莓', '讓追兵吵架'],
       [MX.milk, '鮮奶', '手電筒電池'], [MX.phone, '首長救駕', '擋一次質詢'],
-      [MX.goldBerry, '特級大果藍莓', '每關 3 顆'], [null, '連任', '找到它…？'],
+      [null, '連任', '找到它…？'],
     ];
     items.forEach(([s, name, desc], i) => {
       const cx = 216 + (i % 2) * 90, cy = 90 + Math.floor(i / 2) * 26;
@@ -3503,7 +3487,6 @@ class Game {
       ['小卷投擲', s.thrown, '個', '沒有集體中毒'],
       ['砍樹', s.trees, '棵', `補植 ${repl} 棵`],
       ['遇到鼠蟑', s.rats, '隻', '南鼠北送'],
-      ['特級大果藍莓', s.berries, '顆', '這是藍莓嗎？'],
       ['首長救駕', s.saves, '次', '局長代答'],
     ];
     rows.forEach(([label, v, unit, note], i) => {
