@@ -54,19 +54,36 @@ const SIGHT = { NEAR: 5.5 * TILE, LIT: 9 * TILE, FORGET: 3.4, BOSS_FORGET: 2.6 }
 // End card timeline (seconds since it opened). Input stays locked until LOCK.
 const CARD = { IN: 0.35, ROW0: 0.4, ROW_DT: 0.13, STAMP: 1.6, SLAM: 0.12, LOCK: 2.0 };
 const STORAGE_HI = 'wanan.maze.hi';
+// Boss phase (Galaga-style dodge after clearing maze level 3). No sound — visual cues only.
+const BOSS_HP = 160;
+const BOSS = { REVIVE_AT: 0.08, REVIVE_TIME: 1.9, MAX_SPEEDUP: 1.5 };
+const STAGE_NAMES = ['', '', '認真模式', '翻盤模式', '暴走模式', '海嘯模式'];
+const stageName = (n) => STAGE_NAMES[n] || `無限模式 ${n - 4}`;
+const SURVIVE = { NEED: 105, FIRE: 0.16, SPEED: 150, ACCEL: 1400, BULLET: 280, INVULN: 1.8, BASE_Y: 208 };
+const ENDERS = ['lu', 'han', 'zheng'];   // 盧秀燕 / 韓國瑜 / 鄭麗文 — ending only
+const ENDER_NAMES = { lu: '盧媽媽', han: '韓國瑜', zheng: '鄭麗文' };
+const ENDER_LINE = '上當了吧！繼續當你的台北市長，2028是我的！';
+/** Maze 洋流 hazard: warn → rush along path toward 萬安. Faster than chasers; squid/berry only briefly slow it. */
+const CURRENT = { WARN: 1.15, LIFE: 5.2, SPEED: 98, SLOW: 0.45, SLOW_T: 0.9, HIT: 11, INTERVAL: [16, 24], INTERVAL_LV: 1.6 };
+/** Player-chopped street trees: hold Space ~2.4s while adjacent & facing. */
+const TREE = { MAX_HP: 2.4, RANGE: 1 };
 
-const NAMES = { player: '蔣萬安', boss: '沈伯洋', wang: '王義川', jian: '簡舒培', he: '何孟樺', xu: '許淑華' };
+const NAMES = { player: '蔣萬安', boss: '沈伯洋', jian: '簡舒培', he: '何孟樺', xu: '許淑華' };
 const BUBBLE_TEXT = '來辯論阿';
+// 議員質詢 lines (市長自己回答！ is the most common). 「來辯論阿」 is reserved for 沈伯洋.
 const LINES = {
-  wang: ['來辯論阿！', '我要質詢！', '市長請上台！'],
-  jian: ['我要質詢！', '請市長答詢！', '來辯論阿！'],
-  he:   ['市長請上台！', '我要質詢！', '市長別跑！'],
-  xu:   ['來辯論阿！', '市長請上台！', '我要質詢！'],
-  boss: ['來辯論阿！', '市長請上台！', '我要質詢！'],
+  jian: ['市長自己回答！', '市長自己回答！', '我要質詢！', '請市長答詢！', '市長別跑！'],
+  he:   ['市長自己回答！', '市長自己回答！', '我要質詢！', '市長別跑！'],
+  xu:   ['市長自己回答！', '市長自己回答！', '市長自己回答！', '請市長答詢！', '我要質詢！'],
+  boss: ['來辯論阿！', '讓我們回歸市政 哇哈哈哈', '市長不敢辯論喔？', '來辯論阿！哇哈哈哈'],
 };
-// 萬安's own reaction when he's spotted (the chasers never say 糟糕). The first is the main one: 2 of every 3.
-const PANIC = { LINES: ['糟糕，我不敢辯論', '糟糕，我不敢辯論', '糟糕，要被質詢了'], CD: 6, DUR: 2.2, COLOR: '#24407e' };
-const CHASER_ORDER = ['jian', 'wang', 'he', 'xu'];
+// 萬安's own reaction when spotted (chasers never say 糟糕). Councillors → 質詢 panic; 沈伯洋 → 辯論 panic.
+const PANIC = {
+  CD: 6, DUR: 2.2, COLOR: '#24407e',
+  council: ['糟糕，又要首長救駕了', '糟糕，又要首長救駕了', '糟糕，我答不出來'],
+  boss: ['糟糕，我不敢辯論', '糟糕，我不敢辯論', '糟糕，我不敢辯論'],
+};
+const CHASER_ORDER = ['jian', 'he', 'xu'];
 const LEVELS = [
   { place: '市府路巷弄', theme: 'alley' }, { place: '議會走廊', theme: 'council' }, { place: '萬華老街', theme: 'old' },
   { place: '信義暗巷', theme: 'alley' }, { place: '議會地下室', theme: 'council' }, { place: '大稻埕騎樓', theme: 'old' },
@@ -709,6 +726,21 @@ const SPR = (() => {
 // ─────────────────────────── 4b. MAZE SPRITES ───────────────────────────
 const MX = (() => {
   const P = SPR.parts;
+  // 許淑華: shoulder-length hair (override politics chin-bob with longer locks)
+  P.XU_HEAD = [
+    '    HHHHHHHH',
+    '  HHHHHHHHHHHH',
+    ' HHHHHHhhhHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHSSSSSSHHH',
+    'HHHHSSSSSSSSSSSS',
+    'HHHSSSSKSSSKSSSS',
+    'HHHsSSSKSSSKSSSS',
+    'HHHsSSSSSSSSSSSS',
+    'HHHHSSSSRSSSSRSS',
+    'HHHHSSSSSMMSSSSH',
+  ];
   const eyesClosed = (head) => head.map((r, i) => (i === 7 ? r.replace(/K/g, 'S') : r));
   const koHead = (head) => {
     const h = head.map((r) => [...r.padEnd(16)]);
@@ -751,10 +783,9 @@ const MX = (() => {
   const LONG = [[0, 12, 'H'], [1, 12, 'H'], [2, 12, 'H'], [0, 13, 'H'], [1, 13, 'H'], [2, 13, 'H'], [0, 14, 'H'], [1, 14, 'H'], [15, 12, 'H']];
   const MIC = [[15, 10, 'm'], [15, 9, 'k'], [16, 9, 'k'], [15, 8, 'k'], [16, 8, 'k']];
   const KINDS = {
-    wang: { head: P.WANG_HEAD, body: P.SHIRT_BODY, pal: P.WANG_PAL, extras: MIC },
     jian: { head: P.JIAN_HEAD, body: P.BLAZER_SKIRT, pal: P.JIAN_PAL, extras: LONG },
     he:   { head: P.HE_HEAD, body: P.JACKET_BODY, pal: P.HE_PAL, extras: [] },
-    xu:   { head: P.XU_HEAD, body: P.BLAZER_SKIRT, pal: P.XU_PAL, extras: [] },
+    xu:   { head: P.XU_HEAD, body: P.BLAZER_SKIRT, pal: P.XU_PAL, extras: LONG },
     boss: { head: P.PUMA_HEAD, body: P.SUIT_BODY, pal: { ...P.PUMA_PAL, m: '#d0cde0', k: '#3b3747', T: '#d8343f' }, extras: MIC },
   };
   const chars = {};
@@ -868,7 +899,160 @@ const MX = (() => {
     return m[key];
   }
 
-  return { player, faceSweat, chars, chief, squid, squidSpin, bigBerry, goldBerry, milk, milkGrey, phone, rat, roach, heart, heartEmpty, bubble, stamp, rim };
+
+  // ── Boss-phase props (landscape Galaga) ──
+  const muzzle = makeSprite([' Y Y', 'YWWWY', ' YWY'], { Y: '#ffd84a', W: '#ffffff' }, null);
+  const WAVE_PAL = { F: '#ffffff', L: '#a6e0ff', B: '#4aa3f0', D: '#2b6fd0' };
+  const MINI_WAVE = [
+    '    FFFF    ',
+    '  FFLLLLFF  ',
+    ' FLLBBBBLLF ',
+    'FLBBBDDF  F ',
+    'LBBBDDDDF   ',
+    'BBBDDDDDDBFF',
+    ' DDDDDDDDDD ',
+  ];
+  const miniWave = [0, 1].map((p) => makeSprite(MINI_WAVE.map((row, y) => [...row].map((ch, x) =>
+    ch === 'B' && (x + y + p * 2) % 5 === 0 ? 'L' : ch).join('')), WAVE_PAL));
+  const MIC_ROWS = [' kk', 'kggk', 'kkkk', ' kk', ' mm', ' mm', ' mm', ' ss'];
+  const MIC_SHOT_PAL = { k: '#3b3747', g: '#77738a', m: '#d0cde0', s: '#e05a6a' };
+  const mic = [];
+  for (let i = 0, r = MIC_ROWS; i < 4; i++, r = rot(r)) mic.push(makeSprite(r, MIC_SHOT_PAL));
+  const FLY_PAL = { W: '#fffdf4', g: '#9aa0b8', r: '#e05a6a' };
+  const flyer = [
+    makeSprite(['WWWWWWW', 'WrrrrrW', 'WWWWWWW', 'WggggWW', 'WWWWWWW', 'WgggggW', 'WWWWWWW', 'WgggWWW'], FLY_PAL),
+    makeSprite([' WWWWW', ' WrrrW', ' WWWWW', ' WgggW', ' WWWWW', ' WgggW', ' WWWWW'], FLY_PAL),
+  ];
+  const bian = (() => {
+    const L = layoutCJK('辯', 12, 'bold');
+    const w = L.w + 8, h = L.h + 6;
+    const g = Array.from({ length: h + 3 }, () => Array(w).fill(' '));
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y][x] = y >= h - 2 ? 'S' : 'W';
+    [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]].forEach(([x, y]) => { g[y][x] = ' '; });
+    const tx = Math.min(6, w - 4);
+    [[tx, tx + 1, tx + 2], [tx, tx + 1], [tx]].forEach((xs, i) => xs.forEach((x) => { g[h + i][x] = 'S'; }));
+    const spr = makeSprite(g.map((r) => r.join('')), { W: '#ffffff', S: '#e4def0' });
+    spr.label = { L, x: 5, y: 4, color: '#c2364a' };
+    return spr;
+  })();
+  // Boss 沈伯洋 (calm / fired / dizzy)
+  const bossHead = (fired) => {
+    const h = P.PUMA_HEAD.map((r) => [...r.padEnd(16)]);
+    if (fired) { h[9][7] = 'R'; h[9][8] = 'R'; h[9][13] = 'R'; h[9][14] = 'R'; h[5][3] = 'L'; h[6][3] = 'L'; }
+    return h.map((r) => r.join(''));
+  };
+  const BOSS_PAL = { ...P.PUMA_PAL, R: '#ff7a8a', L: '#bfe6ff' };
+  const bossFrames = (fired) => ['wave', 'up'].map((arm) => makeSprite(mirror(P.chibi({ head: bossHead(fired), body: P.SUIT_BODY, armF: arm })), BOSS_PAL));
+  const bossSpr = { calm: bossFrames(false), fired: bossFrames(true), dizzy: makeSprite(mirror(P.chibi({ head: koHead(P.PUMA_HEAD), body: P.SUIT_BODY, armF: 'up', armB: 'back' })), BOSS_PAL) };
+
+  // Cannon: 萬安 in a little twin-barrel cart (boss phase)
+  const CANNON_PAL = { ...P.PLAYER_PAL, C: '#d94a5c', c: '#a83a4e', Y: '#f2c14e', N: '#3a4466', n: '#7083c0', O: '#f2c14e', w: '#c9c6d6' };
+  function cannonRows(head, wheel) {
+    const W = 28, H = 22;
+    const g = Array.from({ length: H }, () => Array(W).fill(' '));
+    const put = (rows, ox, oy) => rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch !== ' ' && g[y + oy] && x + ox < W) g[y + oy][x + ox] = ch; }));
+    for (let y = 1; y < 14; y++) { const r = y < 3 ? 'OOOO' : 'NnNN'; put([r], 1, y); put([r], 23, y); }
+    put(head, 6, 0);
+    put(P.SUIT_BODY.slice(0, 2), 6, 12);
+    put([
+      '  CCCCCCCCCCCCCCCCCCCCCCCC',
+      ' CYYYYYYYYYYYYYYYYYYYYYYYYC',
+      'CCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+      'CCCCCCCCCCCYYYYYCCCCCCCCCCCC',
+      'CCCCCCCCCCCCYYYCCCCCCCCCCCCC',
+      ' cccccccccccccccccccccccccc',
+    ], 0, 13);
+    const wh = wheel ? [' KKKK', 'KwKKwK', ' KKKK'] : [' KKKK', 'KKwwKK', ' KKKK'];
+    put(wh, 2, 19); put(wh, 20, 19);
+    return g.map((r) => r.join(''));
+  }
+  const cannon = {
+    open: [0, 1].map((f) => makeSprite(cannonRows(P.PLAYER_HEAD, f), CANNON_PAL)),
+    closed: [0, 1].map((f) => makeSprite(cannonRows(eyesClosed(P.PLAYER_HEAD), f), CANNON_PAL)),
+    ko: makeSprite(cannonRows(koHead(P.PLAYER_HEAD), 0), CANNON_PAL),
+    wet: makeSprite(cannonRows((() => {
+      const h = P.PLAYER_HEAD.map((r) => [...r.padEnd(16)]);
+      // dripping water drops on the face / hair
+      h[2][4] = 'D'; h[3][5] = 'D'; h[4][14] = 'D'; h[5][15] = 'D';
+      h[10][11] = 'M'; h[10][12] = 'S'; h[10][13] = 'M';
+      return h.map((r) => r.join(''));
+    })(), 0), { ...CANNON_PAL, D: '#7ec8ff' }),
+  };
+
+  // Ending figures: Q版 盧秀燕 / 韓國瑜 / 鄭麗文 (never appear in the maze)
+  // 盧秀燕: short bob, friendly, glasses-free
+  const LU_HEAD = [
+    '   HHHHHHHHH',
+    '  HHHHHHHHHHH',
+    ' HHHHHhhhHHHHH',
+    'HHHHHHHHHHHHHHH',
+    'HHHHHHSSSSSSHHH',
+    'HHHHSSSSSSSSSSS',
+    'HHHSSSSKSSSKSSS',
+    'HHHsSSSKSSSKSSS',
+    'HHHsSSSSSSSSSSS',
+    ' HHSSSSRSSSSRSS',
+    '  HSSSSSSMMSSSS',
+    '   SSSSSSSSSSS',
+  ];
+  // 韓國瑜: bald head, big smile
+  const HAN_HEAD = [
+    '    SSSSSSSS',
+    '  SSSSSSSSSSSS',
+    ' SSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSSSSSSSSSSS',
+    'SSSSSSKSSSKSSSSS',
+    'SSSSSSKSSSKSSSSS',
+    'SSSSSSSSSSSSSSSS',
+    ' SSSSSRSSSSSRSSS',
+    '  SSSSSSMMMMSSS',
+    '   SSSSSSSSSSS',
+  ];
+  // 鄭麗文: shoulder-length hair
+  const ZHENG_HEAD = [
+    '    HHHHHHHH',
+    '  HHHHHHHHHHHH',
+    ' HHHHHHhhhHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHSSSSSSHHH',
+    'HHHHSSSSSSSSSSSS',
+    'HHHSSSSKSSSKSSSS',
+    'HHHsSSSKSSSKSSSS',
+    'HHHsSSSSSSSSSSSS',
+    'HHHSSSSRSSSSRSSS',
+    'HHHSSSSSSMMSSSSS',
+    ' HHHSSSSSSSSSS H',
+  ];
+  const LU_PAL = { ...P.JIAN_PAL, H: '#4a3a2a', h: '#6a5240', U: '#c45a6a', A: '#a84858', a: '#8e3848', T: '#e8b04a', P: '#8e3848', Q: '#6e2838' };
+  const HAN_PAL = { ...P.PLAYER_PAL, H: '#c8b090', h: '#d8c4a8', U: '#2a5aaa', A: '#1e4888', a: '#163868', T: '#e8b04a', P: '#2a3a58', Q: '#1e2a48' };
+  const ZHENG_PAL = { ...P.XU_PAL, H: '#2a2433', h: '#3a3448', U: '#3a7ad0', A: '#2e68b8', a: '#245898', T: '#e8b04a', P: '#2e3a58', Q: '#222838' };
+  const ender = {};
+  for (const [k, head, body, pal] of [
+    ['lu', LU_HEAD, P.BLAZER_SKIRT, LU_PAL],
+    ['han', HAN_HEAD, P.SUIT_BODY, HAN_PAL],
+    ['zheng', ZHENG_HEAD, P.JACKET_BODY, ZHENG_PAL],
+  ]) {
+    ender[k] = {
+      stand: makeSprite(mirror(P.chibi({ head, body, armF: 'wave' })), pal),
+      splash: makeSprite(mirror(P.chibi({ head, body, armF: 'up', armB: 'up' })), pal),
+    };
+  }
+  // Bucket for cold-water gag
+  const bucket = makeSprite([
+    '  kkkkk',
+    ' kBBBBBk',
+    'kBWWWWBBk',
+    'kBBBBBBk',
+    ' kBBBBBk',
+    '  kkkkk',
+  ], { k: '#3a3448', B: '#5a8ad0', W: '#a8d4ff' });
+  const stampWin = makeStamp('當選', '#d8343f', -0.13);
+  const stamp2028 = makeStamp('2028 沒你的份', '#2a5aaa', -0.1);
+
+  return { player, faceSweat, chars, chief, squid, squidSpin, bigBerry, goldBerry, milk, milkGrey, phone, rat, roach, heart, heartEmpty, bubble, stamp, stampWin, stamp2028, rim,
+    muzzle, miniWave, mic, flyer, bian, bossSpr, cannon, ender, bucket };
 })();
 
 // ─────────────────────── 5. MAZE GENERATION + TILE ART ───────────────────────
@@ -1124,16 +1308,20 @@ class Particles {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const p = this.list[i];
       p.life -= dt;
-      if (p.life <= 0) { this.list.splice(i, 1); continue; }
+      if (p.life <= 0 || (p.confetti && p.y > VIEW_H + 10)) { this.list.splice(i, 1); continue; }
       p.vy += p.g * dt; p.vx *= 1 - p.drag * dt; p.vy *= 1 - p.drag * dt * (p.g ? 0 : 1);
-      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.x += (p.vx + (p.confetti ? Math.sin(p.life * 6 + (p.phase || 0)) * 18 : 0)) * dt;
+      p.y += p.vy * dt;
     }
   }
   draw(ctx, ox = 0, oy = 0) {
     for (const p of this.list) {
       ctx.globalAlpha = clamp(p.life / p.max, 0, 1) ** 0.6;
       ctx.fillStyle = p.color;
-      ctx.fillRect(snap(p.x - ox), snap(p.y - oy), p.size, p.size);
+      if (p.confetti) {
+        const flip = Math.sin(p.life * 14 + (p.phase || 0)) > 0;
+        ctx.fillRect(snap(p.x - ox), snap(p.y - oy), flip ? 2 : 1, flip ? 1 : 2);
+      } else ctx.fillRect(snap(p.x - ox), snap(p.y - oy), p.size, p.size);
     }
     ctx.globalAlpha = 1;
   }
@@ -1148,19 +1336,23 @@ class Particles {
 class Input {
   constructor(el, h) {
     this.k = { up: false, down: false, left: false, right: false };
+    this.space = false; this.chopTouch = false;   // held for tree-chop
     this.joy = null; this.touchUI = false;
     const MAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
     window.addEventListener('keydown', (e) => {
       const m = MAP[e.code];
       if (m) { this.k[m] = true; e.preventDefault(); return; }
-      if (e.code === 'Space') e.preventDefault();
+      if (e.code === 'Space') { e.preventDefault(); if (!this.space) { this.space = true; if (!e.repeat) h.primary(performance.now()); } return; }
       if (e.repeat) return;
-      if (e.code === 'Space' || e.code === 'KeyJ') h.primary(performance.now());
+      if (e.code === 'KeyJ') h.throwItem(performance.now());
       else if (e.code === 'Enter') { e.preventDefault(); h.confirm(performance.now()); }
       else if (e.code === 'KeyK' || e.code === 'KeyL' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') h.secondary();
       else if (e.code === 'KeyP' || e.code === 'Escape') h.pause();
     });
-    window.addEventListener('keyup', (e) => { const m = MAP[e.code]; if (m) this.k[m] = false; });
+    window.addEventListener('keyup', (e) => {
+      const m = MAP[e.code]; if (m) this.k[m] = false;
+      if (e.code === 'Space') { this.space = false; h.primaryUp && h.primaryUp(); }
+    });
     const logical = (e) => { const r = el.getBoundingClientRect(); return { x: ((e.clientX - r.left) * VIEW_W) / r.width, y: ((e.clientY - r.top) * VIEW_H) / r.height }; };
     const taps = new Map();
     el.addEventListener('pointerdown', (e) => {
@@ -1169,7 +1361,7 @@ class Input {
       if (e.pointerType === 'touch' || e.pointerType === 'pen') this.touchUI = true;
       const p = logical(e), now = performance.now();
       const btn = this.touchUI ? h.hitButton(p) : null;
-      if (btn) { h.button(btn); taps.set(e.pointerId, { btn: true }); return; }
+      if (btn) { h.button(btn); taps.set(e.pointerId, { btn, hold: btn === 'chop' }); return; }
       if (e.pointerType !== 'mouse' && !this.joy && h.wantsJoystick(p)) { this.joy = { id: e.pointerId, ox: p.x, oy: p.y, x: p.x, y: p.y, t: now, moved: 0 }; return; }
       taps.set(e.pointerId, { x: p.x, y: p.y, t: now, moved: 0 });
     });
@@ -1189,11 +1381,12 @@ class Input {
         return;
       }
       const tp = taps.get(e.pointerId); taps.delete(e.pointerId);
+      if (tp && tp.btn && tp.hold && h.buttonUp) h.buttonUp(tp.btn);
       if (!cancel && tp && !tp.btn && tp.moved < 8 && now - tp.t < 450) h.confirm(tp.t);
     };
     el.addEventListener('pointerup', (e) => end(e, false));
     el.addEventListener('pointercancel', (e) => end(e, true));
-    const clear = () => { this.k.up = this.k.down = this.k.left = this.k.right = false; this.joy = null; taps.clear(); };
+    const clear = () => { this.k.up = this.k.down = this.k.left = this.k.right = false; this.space = false; this.chopTouch = false; this.joy = null; taps.clear(); };
     window.addEventListener('blur', () => { clear(); h.blur(); });
     document.addEventListener('visibilitychange', () => { if (document.hidden) { clear(); h.blur(); } });
   }
@@ -1224,13 +1417,16 @@ class Game {
     this.debug = { god: false, noEvents: false };
     this.input = new Input(canvas, {
       primary: (t) => this.onPrimary(t),
+      primaryUp: () => { this.chopping = false; },
+      throwItem: (t) => { if (this.state === 'playing' && !this.paused) this.throwSquid(); else this.onConfirm(t); },
       secondary: () => this.throwBerry(),
       confirm: (t) => this.onConfirm(t),
       pause: () => this.togglePause(),
-      blur: () => { if (this.state === 'playing' && !this.paused) this.paused = true; },
+      blur: () => { if ((this.state === 'playing' || this.state === 'boss') && !this.paused) this.paused = true; },
       hitButton: (p) => this.hitButton(p),
       button: (b) => this.onButton(b),
-      wantsJoystick: (p) => this.state === 'playing' && !this.paused && p.x < VIEW_W * 0.62 && p.y > HUD_H,
+      buttonUp: (b) => { if (b === 'chop') { this.input.chopTouch = false; this.chopping = false; } },
+      wantsJoystick: (p) => !this.paused && ((this.state === 'playing' && p.x < VIEW_W * 0.62 && p.y > HUD_H) || (this.state === 'boss' && p.y > HUD_H)),
     });
     this.state = 'title'; this.stateT = 0;
     this.newGame(true);
@@ -1252,6 +1448,8 @@ class Game {
     this.stats = { reloc: 0, caught: 0, thrown: 0, trees: 0, rats: 0, berries: 0, saves: 0 };
     this.newBest = false; this.acceptAt = null; this.stamped = false; this.cardFx.clear();
     this.seq = null; this.banner = null; this.toasts = []; this.alarm = false; this.alarmLevel = 0;
+    this.bossReached = false; this.diedInBoss = false; this.boss = null; this.bp = null; this.cold = null;
+    this.surviveT = 0; this.surviveDone = false;
     this.loadLevel(1);
   }
   start() {
@@ -1270,10 +1468,11 @@ class Game {
     const e = this.tileCenter(lv.exit.x, lv.exit.y);
     this.exit = { x: e.x, y: e.y, run: null };
     this.shots = []; this.rings = []; this.cuts = []; this.texts = []; this.minion = null;
+    this.currents = []; this.currentT = rand(...CURRENT.INTERVAL) * (0.55 + 0.1 * Math.random());
+    this.currentWarnFlash = 0; this.treeHp = {}; this.chopping = false; this.chopTarget = null;
     this.particles.clear(); this.glints.clear();
     this.milkTaken = false; this.levelGold = 0;
     this.placeItems(); this.spawnChasers(); this.spawnRats();
-    this.cutT = this.cutInterval() * 0.6;
     this.ratWaveT = n >= 2 ? rand(16, 24) : Infinity; this.ratWarn = 0;
     this.dirtyFields = true; this.updateFields();
     this.cam = { x: 0, y: 0 }; this.updateCamera(0, true);
@@ -1285,29 +1484,38 @@ class Game {
     this.banner = { title: `第${n}關・${this.lv.place}`, sub, t: 0, dur: 2.4, style: 'gold' };
   }
   onPrimary(t) {
-    if (this.state === 'playing' && !this.paused) this.throwSquid();
-    else this.onConfirm(t);
+    if (this.state === 'playing' && !this.paused) {
+      if (this.faceTree()) { this.chopping = true; return; }
+      this.throwSquid();
+    } else this.onConfirm(t);
   }
   onConfirm(pressT) {
     if (this.paused) { this.paused = false; return; }
     if (this.state === 'title') this.start();
-    // the 敗選 card only closes on a fresh press that began after the input lock lifted
-    else if (this.state === 'over' && this.acceptAt !== null && pressT >= this.acceptAt) this.start();
+    // end cards only close on a fresh press that began after the input lock lifted
+    else if ((this.state === 'over' || this.state === 'winFinal') && this.acceptAt !== null && pressT >= this.acceptAt) this.start();
   }
-  togglePause() { if (this.state === 'playing') this.paused = !this.paused; }
+  togglePause() { if (this.state === 'playing' || this.state === 'boss') this.paused = !this.paused; }
   touchButtons() {
-    return [
+    const btns = [
       { id: 'squid', x: VIEW_W - 28, y: VIEW_H - 28, r: 16 },
       { id: 'berry', x: VIEW_W - 66, y: VIEW_H - 20, r: 12 },
       { id: 'pause', x: VIEW_W - 14, y: HUD_H + 13, r: 9 },
     ];
+    if (this.state === 'playing' && this.faceTree()) btns.push({ id: 'chop', x: VIEW_W - 104, y: VIEW_H - 28, r: 14, label: '砍' });
+    return btns;
   }
   hitButton(p) {
     if (this.state !== 'playing' || this.paused) return null;
     const b = this.touchButtons().find((b) => Math.hypot(p.x - b.x, p.y - b.y) <= b.r + 4);
     return b ? b.id : null;
   }
-  onButton(id) { if (id === 'squid') this.throwSquid(); else if (id === 'berry') this.throwBerry(); else if (id === 'pause') this.togglePause(); }
+  onButton(id) {
+    if (id === 'squid') this.throwSquid();
+    else if (id === 'berry') this.throwBerry();
+    else if (id === 'pause') this.togglePause();
+    else if (id === 'chop') { this.input.chopTouch = true; this.chopping = true; }
+  }
 
   // ── Map helpers ──
   tileCenter(tx, ty) { return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 }; }
@@ -1382,7 +1590,7 @@ class Game {
     const lv = this.lv, n = lv.n, count = Math.min(2 + n, 9);
     const used = new Set(), picks = [];
     for (let k = 0; k < count; k++) { const i = this.pickSpread(lv.floors, used, 12, 6); if (i >= 0) picks.push(i); }
-    this.chasers = picks.map((i, k) => this.makeChaser(n >= 3 && k === 0 ? 'boss' : CHASER_ORDER[k % 4], i % lv.w, (i / lv.w) | 0));
+    this.chasers = picks.map((i, k) => this.makeChaser(n >= 3 && k === 0 ? 'boss' : CHASER_ORDER[k % CHASER_ORDER.length], i % lv.w, (i / lv.w) | 0));
   }
   spawnRats() { this.rats = []; for (let k = 0; k < 5 + this.lv.n; k++) this.addRat(false); }
   addRat(wave, i) {
@@ -1404,7 +1612,10 @@ class Game {
     this.shake = Math.max(0, this.shake - dt * 18);
     this.flash = Math.max(0, this.flash - dt * 2.5);
     if (this.state === 'title') this.updateDemo(dt);
-    else if (this.state === 'over') this.updateEnd(dt);
+    else if (this.state === 'over' || this.state === 'winFinal') this.updateEnd(dt);
+    else if (this.state === 'boss') this.updateBossPhase(dt);
+    else if (this.state === 'bossWin') this.updateFakeWin(dt);
+    else if (this.state === 'coldwater') this.updateColdWater(dt);
     else {
       if (this.seq) this.updateSeq(dt); else this.updatePlay(dt);
       this.updateCamera(dt);
@@ -1424,7 +1635,7 @@ class Game {
     this.score += 8 * dt;
     this.updatePlayer(dt);
     this.battery = Math.max(0, this.battery - LIGHT.DRAIN * dt);
-    this.alarm = this.chasers.some((c) => c.mode === 'chase');
+    this.alarm = this.chasers.some((c) => c.mode === 'chase') || this.currents.some((c) => c.mode === 'rush');
     this.computeLight();
     this.updateFields();
     for (const c of this.chasers) this.updateChaser(c, dt);
@@ -1524,13 +1735,14 @@ class Game {
     if (!c.met) { c.met = true; this.toast(c.boss ? `魔王 ${NAMES.boss} 出現了！` : `${NAMES[c.kind]} 發現你了！`, c.boss ? '#ff7a7a' : '#ffd45e'); }
     for (let i = 0; i < 8; i++) this.glints.emit({ x: c.x, y: c.y - 26, vx: rand(-45, 45), vy: rand(-60, -20), g: 140, life: 0.45, color: i % 2 ? '#ff5a5a' : '#ffffff', size: 2 });
     this.p.sweatT = 1.6;
-    this.panic();
+    this.panic(!!c.boss);
   }
   /** His bubble when someone spots him; cooldown so a pack of chasers doesn't spam it, and never cuts off another line. */
-  panic() {
+  panic(byBoss = false) {
     const p = this.p;
     if (p.panicCd > 0 || p.bubble || this.seq) return;
-    this.say(p, PANIC.LINES[p.panicN++ % PANIC.LINES.length], PANIC.DUR, PANIC.COLOR);
+    const lines = byBoss ? PANIC.boss : PANIC.council;
+    this.say(p, lines[p.panicN++ % lines.length], PANIC.DUR, PANIC.COLOR);
     p.panicCd = PANIC.CD;
   }
   updateChaser(c, dt) {
@@ -1647,7 +1859,10 @@ class Game {
       for (const c of this.chasers) { if (c.bubble) c.bubble.t -= dt; }
       if (s.t >= 2.1) this.seq = { type: 'iris', t: 0, out: true };
     } else if (s.type === 'iris') {
-      if (s.out && s.t >= 0.5) { this.loadLevel(this.lv.n + 1); this.seq = { type: 'iris', t: 0, out: false }; this.levelBanner(); }
+      if (s.out && s.t >= 0.5) {
+        if (this.lv.n >= 3) { this.seq = null; this.beginBossTransition(); }
+        else { this.loadLevel(this.lv.n + 1); this.seq = { type: 'iris', t: 0, out: false }; this.levelBanner(); }
+      }
       else if (!s.out && s.t >= 0.5) this.seq = null;
     }
   }
@@ -1733,6 +1948,7 @@ class Game {
         s.x = nx; s.y = ny;
         const hit = this.chasers.find((c) => c.mode !== 'stun' && Math.abs(c.x - s.x) < 11 && s.y - c.y > -15 && s.y - c.y < 9);   // body-shaped: the sprite stands above its feet
         if (hit) { this.stunChaser(hit); this.splat(s.x, s.y, ['#ff9ab8', '#ffc4d6', '#8fe07a']); this.shots.splice(k, 1); }
+        else this.slowCurrentsNear(s.x, s.y, 14);
       } else {
         const DUR = 0.55;
         if (this.solidAt(nx, ny) || s.t >= DUR) { this.berryBurst(s.x, s.y); this.shots.splice(k, 1); continue; }
@@ -1759,6 +1975,7 @@ class Game {
       n++; this.score += 80;
     }
     this.text(n ? '吵起來了！' : '這是藍莓嗎？', x, y + 24, '#c9b4ff', 1.3);
+    this.slowCurrentsNear(x, y, 110);
     this.shake = 3;
   }
   updateItems(dt) {
@@ -1792,44 +2009,165 @@ class Game {
     return false;
   }
 
-  // ── Timed city events: tree removal, 南鼠北送 ──
-  cutInterval() { return Math.max(14, 26 - this.lv.n * 1.5); }
+  // ── Timed events: 洋流 hazard + 南鼠北送 (no auto tree-cutting — player chops) ──
   updateEvents(dt) {
     if (!this.debug.noEvents) {
-      if ((this.cutT -= dt) <= 0) { this.cutT = this.cutInterval(); this.startCut(); }
       if ((this.ratWaveT -= dt) <= 0) { this.ratWaveT = rand(38, 52); this.startRatWave(); }
+      if ((this.currentT -= dt) <= 0) { this.spawnCurrent(); this.currentT = Math.max(9, rand(...CURRENT.INTERVAL) - (this.lv.n - 1) * CURRENT.INTERVAL_LV); }
     }
     if (this.ratWarn > 0 && (this.ratWarn -= dt) <= 0) this.spawnRatWave();
-    for (let k = this.cuts.length - 1; k >= 0; k--) {
-      const c = this.cuts[k];
-      c.t += dt;
-      if (c.t < 0) continue;
-      const cx = c.x * TILE + 10, cy = c.y * TILE + 10;
-      if (Math.random() < dt * 34) this.particles.emit({ x: cx + rand(-6, 6), y: cy + rand(-8, 4), vx: rand(-50, 50), vy: rand(-60, -10), g: 160, life: rand(0.3, 0.6), size: Math.random() < 0.4 ? 2 : 1, color: pick(['#c8935a', '#8a5a2c', '#52a95c', '#86d477']) });
-      if (Math.random() < dt * 20) this.glints.emit({ x: cx + rand(-3, 3), y: cy + 2, vx: rand(-40, 40), vy: rand(-40, -10), g: 100, life: 0.25, color: '#ffd84a' });
-      if (c.t >= 1.2) {
-        this.lv.t[c.i] = T_UMB;
-        this.repaintAround(c.x, c.y);
-        this.stats.trees++; this.dirtyFields = true;
-        for (let i = 0; i < 12; i++) this.particles.emit({ x: cx + rand(-8, 8), y: cy + rand(-8, 6), vx: rand(-30, 30), vy: rand(-30, 0), drag: 3, life: 0.5, color: pick(['#e6e0f0', '#2fb5ad', '#ffffff']) });
-        this.text('744萬遮陽傘', cx, cy - 16, '#ffd45e', 1.8);
-        this.cuts.splice(k, 1);
-        if (!this.cuts.length) this.toast(`移除 ${this.stats.trees} 棵、補植 ${Math.floor((this.stats.trees * TREES.REPLANTED) / TREES.REMOVED)} 棵`, '#a8e89a');
-      }
-    }
+    this.currentWarnFlash = Math.max(0, this.currentWarnFlash - dt);
+    this.updateCurrents(dt);
+    this.updateChop(dt);
   }
+
+  /** Adjacent tree in the facing direction (or any cardinal neighbour if facing into open air). */
+  faceTree() {
+    if (this.state !== 'playing' || this.seq) return null;
+    const p = this.p, tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
+    const fx = Math.abs(p.fx) >= Math.abs(p.fy) ? Math.sign(p.fx || p.face) : 0;
+    const fy = fx === 0 ? Math.sign(p.fy || 0) : 0;
+    const tryAt = (x, y) => {
+      if (x < 0 || y < 0 || x >= this.lv.w || y >= this.lv.h) return null;
+      const i = y * this.lv.w + x;
+      return this.lv.t[i] === T_TREE ? { i, x, y } : null;
+    };
+    let hit = tryAt(tx + fx, ty + fy);
+    if (hit) return hit;
+    // also allow standing beside a tree (orthogonal neighbour within 1 tile)
+    for (const [dx, dy] of DIRS4) {
+      hit = tryAt(tx + dx, ty + dy);
+      if (hit && Math.hypot(p.x - (hit.x * TILE + 10), p.y - (hit.y * TILE + 10)) < TILE * 1.35) return hit;
+    }
+    return null;
+  }
+  updateChop(dt) {
+    const holding = this.input.space || this.input.chopTouch;
+    const tree = this.faceTree();
+    if (!holding || !this.chopping || !tree) {
+      if (!holding) this.chopping = false;
+      this.chopTarget = null;
+      return;
+    }
+    this.chopTarget = tree;
+    const hp = this.treeHp[tree.i] == null ? TREE.MAX_HP : this.treeHp[tree.i];
+    const next = Math.max(0, hp - dt);
+    this.treeHp[tree.i] = next;
+    const cx = tree.x * TILE + 10, cy = tree.y * TILE + 10;
+    if (Math.random() < dt * 40) this.particles.emit({ x: cx + rand(-6, 6), y: cy + rand(-8, 4), vx: rand(-55, 55), vy: rand(-70, -10), g: 180, life: rand(0.25, 0.5), size: Math.random() < 0.4 ? 2 : 1, color: pick(['#c8935a', '#8a5a2c', '#52a95c', '#86d477', '#ffe9a0']) });
+    if (Math.random() < dt * 18) this.glints.emit({ x: cx + rand(-4, 4), y: cy + 2, vx: rand(-30, 30), vy: rand(-40, -8), g: 90, life: 0.25, color: '#ffd84a' });
+    this.shake = Math.max(this.shake, 0.8);
+    if (next <= 0) this.finishChop(tree);
+  }
+  finishChop(tree) {
+    const cx = tree.x * TILE + 10, cy = tree.y * TILE + 10;
+    this.lv.t[tree.i] = T_UMB;
+    delete this.treeHp[tree.i];
+    this.repaintAround(tree.x, tree.y);
+    this.stats.trees++; this.dirtyFields = true; this.updateFields();
+    for (let i = 0; i < 16; i++) this.particles.emit({ x: cx + rand(-8, 8), y: cy + rand(-8, 6), vx: rand(-40, 40), vy: rand(-40, 0), drag: 3, life: 0.55, color: pick(['#e6e0f0', '#2fb5ad', '#ffffff', '#c8935a']) });
+    this.text('744萬遮陽傘', cx, cy - 16, '#ffd45e', 1.8);
+    this.toast(`移除 ${this.stats.trees} 棵、補植 ${Math.floor((this.stats.trees * TREES.REPLANTED) / TREES.REMOVED)} 棵`, '#a8e89a');
+    this.chopping = false; this.chopTarget = null; this.input.chopTouch = false;
+    this.shake = 3; this.flash = 0.2; this.flashColor = '180,220,160';
+  }
+  /** Debug/test: instantly fell `n` nearby trees into 遮陽傘. */
   startCut(maxN) {
     const lv = this.lv, ptx = this.p.x / TILE, pty = this.p.y / TILE;
     const trees = [];
-    for (let i = 0; i < lv.t.length; i++) if (lv.t[i] === T_TREE && !this.cuts.some((c) => c.i === i)) trees.push(i);
+    for (let i = 0; i < lv.t.length; i++) if (lv.t[i] === T_TREE) trees.push(i);
     if (!trees.length) return 0;
     const dist = (i) => Math.hypot((i % lv.w) + 0.5 - ptx, ((i / lv.w) | 0) + 0.5 - pty);
     trees.sort((a, b) => dist(a) - dist(b));
-    const near = trees.filter((i) => dist(i) < 9), pool = near.length ? near : trees;
-    const k = Math.min(pool.length, maxN || (2 + (lv.n >= 4 ? 1 : 0)));
-    pool.slice(0, k).forEach((i, j) => this.cuts.push({ i, x: i % lv.w, y: (i / lv.w) | 0, t: -j * 0.3 }));
-    this.toast('行道樹移除作業中…', '#a8e89a');
+    const k = Math.min(trees.length, maxN || 3);
+    for (let j = 0; j < k; j++) {
+      const i = trees[j], x = i % lv.w, y = (i / lv.w) | 0;
+      this.finishChop({ i, x, y });
+    }
     return k;
+  }
+
+  // ── 洋流 hazard ──
+  spawnCurrent(at) {
+    const lv = this.lv, p = this.p;
+    let i = at;
+    if (i == null) {
+      const pool = lv.floors.filter((j) => {
+        const d = Math.hypot((j % lv.w) * TILE + 10 - p.x, ((j / lv.w) | 0) * TILE + 10 - p.y);
+        return d > TILE * 7 && d < TILE * 16;
+      });
+      if (!pool.length) return null;
+      i = pick(pool);
+    }
+    const tx = i % lv.w, ty = (i / lv.w) | 0, c = this.tileCenter(tx, ty);
+    const cur = {
+      x: c.x, y: c.y, tx, ty, ptx: tx, pty: ty,
+      mode: 'warn', t: 0, life: CURRENT.LIFE, slowT: 0, anim: Math.random() * 4,
+      face: 1, warnDir: 0,
+    };
+    cur.warnDir = Math.atan2(p.y - cur.y, p.x - cur.x);
+    this.currents.push(cur);
+    this.currentWarnFlash = CURRENT.WARN;
+    this.toast('洋流來了！', '#7ec8ff');
+    this.shake = Math.max(this.shake, 2);
+    return this.currents.length - 1;
+  }
+  updateCurrents(dt) {
+    const p = this.p;
+    for (let k = this.currents.length - 1; k >= 0; k--) {
+      const c = this.currents[k];
+      c.t += dt; c.anim += dt; c.slowT = Math.max(0, c.slowT - dt);
+      if (c.mode === 'warn') {
+        c.warnDir = Math.atan2(p.y - c.y, p.x - c.x);
+        if (c.t >= CURRENT.WARN) { c.mode = 'rush'; c.t = 0; }
+        continue;
+      }
+      // rush: pathfind toward player via distance field
+      c.life -= dt;
+      if (c.life <= 0) {
+        for (let i = 0; i < 10; i++) this.particles.emit({ x: c.x + rand(-8, 8), y: c.y + rand(-6, 6), vx: rand(-40, 40), vy: rand(-30, 10), drag: 3, life: 0.4, color: pick(['#7ec8ff', '#bfe8ff', '#ffffff']) });
+        this.currents.splice(k, 1); continue;
+      }
+      const sp = CURRENT.SPEED * (c.slowT > 0 ? CURRENT.SLOW : 1) * (1 + 0.04 * (this.lv.n - 1));
+      if (this.field) {
+        this.stepTiles(c, sp * dt, (x, y, opts) => {
+          let best = null, bd = 1e9;
+          for (const o of opts) { const d = this.field[o[1] * this.lv.w + o[0]]; if (d >= 0 && d < bd) { bd = d; best = o; } }
+          return best;
+        });
+      } else {
+        const dx = p.x - c.x, dy = p.y - c.y, d = Math.hypot(dx, dy) || 1;
+        c.x += (dx / d) * sp * dt; c.y += (dy / d) * sp * dt;
+      }
+      if (Math.random() < dt * 22) this.particles.emit({ x: c.x + rand(-6, 6), y: c.y + rand(-4, 4), vx: rand(-20, 20), vy: rand(-25, 5), life: 0.35, color: pick(['#7ec8ff', '#ffffff', '#4aa3f0']), size: Math.random() < 0.5 ? 2 : 1 });
+      // hit player
+      if (!this.seq && p.invuln <= 0 && !this.debug.god && Math.hypot(c.x - p.x, c.y - p.y) < CURRENT.HIT) {
+        this.caughtByCurrent(c);
+        this.currents.splice(k, 1);
+      }
+    }
+  }
+  caughtByCurrent(c) {
+    if (this.seq) return;
+    // same as chaser catch, but no 首長救駕 (wave isn't a councillor) — still allow save phone? User said "same as being caught". Keep save.
+    if (this.inv.save > 0) {
+      // fake a phantom "by" for save animation near the wave
+      const phantom = { x: c.x, y: c.y, mode: 'stun', modeT: 0, bubble: null, alertT: 0 };
+      this.startSave(phantom);
+      return;
+    }
+    this.lives--; this.stats.caught++;
+    this.seq = { type: 'caught', t: 0, by: { x: c.x, y: c.y, bubble: null, alertT: 0, kind: 'boss' } };
+    this.shake = 6; this.flash = 0.7; this.flashColor = '90,180,255';
+    this.toast('被洋流衝倒！', '#7ec8ff');
+    this.say(this.p, '糟糕，又被沖走了', 2.0, PANIC.COLOR);
+  }
+  /** Squid/berry briefly slow currents; they do not stun or stop them. */
+  slowCurrentsNear(x, y, r) {
+    for (const c of this.currents) {
+      if (c.mode !== 'rush') continue;
+      if (Math.hypot(c.x - x, c.y - y) < r) { c.slowT = CURRENT.SLOW_T; this.text('洋流減速…', c.x, c.y - 20, '#bfe8ff', 0.9); }
+    }
   }
 
   // ── Feedback ──
@@ -1853,22 +2191,383 @@ class Game {
     const s = Math.floor(this.score);
     if (s > this.hi) { this.newBest = this.hi > 0; this.hi = s; localStorage.setItem(STORAGE_HI, String(s)); }
   }
-  /** The only ending: the 市政成績單 with a big 敗選 stamp. */
-  endGame() {
-    if (this.state === 'over') return;
+  // ═══════════════════════════ BOSS PHASE ═══════════════════════════
+  // Landscape Galaga-style dodge after clearing maze level 3. Visual cues only (no SFX).
+  beginBossTransition() {
+    this.bossReached = true;
+    this.state = 'boss'; this.stateT = 0; this.paused = false; this.seq = null;
+    this.banner = { title: '最終關：沈伯洋來了', sub: '左右閃避・鮮奶齊發！', t: 0, dur: 2.8, style: 'boss' };
+    this.shake = 5; this.flash = 0.5; this.flashColor = '120,80,200';
+    this.initBossFight();
+  }
+  initBossFight() {
+    this.bp = {
+      x: VIEW_W / 2, vx: 0, fireCd: 0.4, barrel: 0, recoil: 0, flash: [0, 0],
+      invuln: 2.0, hurtT: 0, ko: false, blinkIn: 2, blinkT: 0, roll: 0,
+    };
+    this.boss = {
+      x: VIEW_W / 2, y: -50, hp: BOSS_HP, chip: BOSS_HP, stage: 1, revives: 0,
+      state: 'enter', t: 0, patT: 2.0, patIdx: 0, flash: 0, steam: 0, from: 0,
+      bubble: null, bubbleCd: 1.5, lineIdx: -1,
+    };
+    this.bShots = []; this.bEnemyShots = []; this.bPending = [];
+    this.bMinions = []; this.surviveT = 0; this.surviveDone = false;
+    this.fakeWinT = 0; this.cold = null; this.overIn = 0;
+    this.fxBoss = new Particles();
+  }
+  laterB(t, fn) { this.bPending.push({ t, fn }); }
+  bossBox() { const b = this.boss; return { x0: b.x - 17, x1: b.x + 17, y0: b.y - 26, y1: b.y + 18 }; }
+  bpHitbox() {
+    const p = this.bp, by = SURVIVE.BASE_Y;
+    return { x0: p.x - 8, x1: p.x + 8, y0: by - 20, y1: by - 4 };
+  }
+  overlap(a, b) { return a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0; }
+  bossTuning() {
+    const n = this.boss.stage;
+    return {
+      speed: Math.min(BOSS.MAX_SPEEDUP, 1 + 0.08 * (n - 1)),
+      every: Math.max(1.05, [1.9, 1.9, 1.55, 1.4, 1.3][n] || 1.4 - 0.05 * (n - 3)),
+      move: Math.min(1.6, 0.8 + 0.15 * (n - 1)),
+    };
+  }
+  clearBEnemyShots() {
+    for (const s of this.bEnemyShots) this.puffB(s.x, s.y, 3);
+    this.bEnemyShots.length = 0;
+  }
+  puffB(x, y, n) {
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, Math.PI * 2), sp = rand(15, 60);
+      this.fxBoss.emit({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, drag: 3, life: rand(0.3, 0.6), size: Math.random() < 0.5 ? 2 : 1, color: pick(['#ffffff', '#f2eefa', '#d9d4ea']) });
+    }
+  }
+  sprayB(x, y) {
+    this.fxBoss.emit({ x, y, vx: rand(-25, 25), vy: rand(-40, -10), g: 120, life: rand(0.25, 0.45), color: pick(['#ffffff', '#bfe8ff', '#7fd0ff']) });
+  }
+  confettiB(n) {
+    const cols = ['#ff5a6e', '#ffd84a', '#5fd38a', '#5fb4ff', '#c58cff', '#ffffff', '#ff9ab8'];
+    for (let i = 0; i < n; i++) this.fxBoss.emit({ x: rand(0, VIEW_W), y: rand(-40, -2), vx: rand(-20, 20), vy: rand(30, 70), g: 20, life: rand(2.5, 4), color: pick(cols), confetti: true, phase: Math.random() * 6 });
+  }
+  updateBossPhase(dt) {
+    if (this.paused) return;
+    const bp = this.bp, b = this.boss;
+    // pending callbacks
+    for (let i = this.bPending.length - 1; i >= 0; i--) {
+      const p = this.bPending[i]; p.t -= dt;
+      if (p.t <= 0) { this.bPending.splice(i, 1); p.fn(); }
+    }
+    // player move L/R
+    if (!bp.ko) {
+      let dir = 0;
+      const v = this.input.vec;
+      if (Math.abs(v.x) > 0.15) dir = Math.sign(v.x);
+      // touch half-screen: if joy not active, map left/right halves via last pointer (handled via vec already for joy)
+      // also support held left/right keys through vec
+      bp.vx = approach(bp.vx, dir * SURVIVE.SPEED, SURVIVE.ACCEL * dt);
+      const nx = clamp(bp.x + bp.vx * dt, 18, VIEW_W - 18);
+      bp.roll += Math.abs(nx - bp.x); bp.x = nx;
+      bp.invuln = Math.max(0, bp.invuln - dt); bp.hurtT = Math.max(0, bp.hurtT - dt);
+      bp.recoil = Math.max(0, bp.recoil - dt);
+      bp.flash = bp.flash.map((f) => Math.max(0, f - dt));
+      bp.blinkIn -= dt;
+      if (bp.blinkIn <= 0) { bp.blinkT = 0.12; bp.blinkIn = rand(2, 4.5); }
+      bp.blinkT = Math.max(0, bp.blinkT - dt);
+      // auto fire
+      bp.fireCd -= dt;
+      if (bp.fireCd <= 0 && b.state !== 'enter') {
+        bp.fireCd = SURVIVE.FIRE;
+        const left = bp.barrel === 0; bp.barrel ^= 1;
+        const bx = bp.x + (left ? -11.5 : 10.5), by = SURVIVE.BASE_Y - 20;
+        this.bShots.push({ x: bx, y: by, vx: 0, vy: -SURVIVE.BULLET, t: 0 });
+        bp.flash[left ? 0 : 1] = 0.05; bp.recoil = 0.05;
+      }
+    }
+    // milk shots (move first)
+    for (let i = this.bShots.length - 1; i >= 0; i--) {
+      const s = this.bShots[i]; s.t += dt; s.x += s.vx * dt; s.y += s.vy * dt;
+      if (s.y < -10 || s.x < -10 || s.x > VIEW_W + 10) { this.bShots.splice(i, 1); continue; }
+    }
+    // enemy shots move
+    for (let i = this.bEnemyShots.length - 1; i >= 0; i--) {
+      const s = this.bEnemyShots[i]; s.t += dt;
+      s.x += s.vx * dt + (s.drift ? Math.sin(this.time * 1.5 + s.dph) * s.drift * dt * 0 : 0);
+      if (s.drift) s.x = s.baseX + Math.sin(this.time * 1.5 + s.dph) * s.drift;
+      s.y += s.vy * dt;
+      if (s.wobble) s.x += Math.sin(s.t * 6) * s.wobble * dt;
+      if (s.sway) s.x += Math.sin(s.t * 4) * s.sway * dt;
+      if (s.y > VIEW_H + 20 || s.y < -30 || s.x < -40 || s.x > VIEW_W + 40) { this.bEnemyShots.splice(i, 1); continue; }
+    }
+    // hits after move
+    for (let i = this.bShots.length - 1; i >= 0; i--) {
+      const s = this.bShots[i];
+      if (b && b.state === 'fight' && this.overlap({ x0: s.x - 3, x1: s.x + 3, y0: s.y - 5, y1: s.y + 5 }, this.bossBox())) {
+        this.bShots.splice(i, 1);
+        this.damageBossB(1);
+        this.fxBoss.emit({ x: s.x, y: s.y, vx: rand(-20, 20), vy: rand(-30, -5), life: 0.35, color: '#ffffff', size: 2 });
+        continue;
+      }
+      // hit minions
+      for (let j = this.bMinions.length - 1; j >= 0; j--) {
+        const m = this.bMinions[j];
+        if (Math.abs(m.x - s.x) < 10 && Math.abs(m.y - s.y) < 12) {
+          this.bShots.splice(i, 1);
+          this.puffB(m.x, m.y, 10);
+          this.score += 100;
+          this.bMinions.splice(j, 1);
+          break;
+        }
+      }
+    }
+    for (const s of this.bEnemyShots) {
+      if (bp.ko || bp.invuln > 0) continue;
+      const def = s.def;
+      if (this.overlap({ x0: s.x - def.hw, x1: s.x + def.hw, y0: s.y - def.hh, y1: s.y + def.hh }, this.bpHitbox())) {
+        this.hurtBossPlayer(); break;
+      }
+    }
+    for (const m of this.bMinions) {
+      if (!bp.ko && bp.invuln <= 0 && Math.abs(m.x - bp.x) < 12 && Math.abs(m.y - (SURVIVE.BASE_Y - 12)) < 14) this.hurtBossPlayer();
+    }
+    this.updateBossEntity(dt);
+    this.updateBMinions(dt);
+    // survival clock (only while fighting / reviving — not during enter banner)
+    if (b.state === 'fight' || b.state === 'revive' || b.state === 'shift') {
+      this.surviveT += dt;
+      if (!this.surviveDone && this.surviveT >= SURVIVE.NEED) {
+        this.surviveDone = true;
+        this.triggerFakeWin();
+        return;
+      }
+    }
+    this.fxBoss.update(dt);
+    if (bp.ko) { this.overIn -= dt; if (this.overIn <= 0) this.endGame(true); }
+    this.score += 12 * dt;
+  }
+  updateBossEntity(dt) {
+    const b = this.boss; if (!b) return;
+    b.t += dt; b.flash = Math.max(0, b.flash - dt);
+    b.chip = approach(b.chip, b.hp, dt * 30 * (b.chip - b.hp > 10 ? 2 : 1));
+    if (b.bubble && (b.bubble.t -= dt) <= 0) b.bubble = null;
+    if (b.state === 'enter') {
+      b.y = lerp(-50, 48, easeOutCubic(Math.min(1, b.t / 2.0)));
+      if (Math.random() < dt * 18) this.sprayB(b.x + rand(-24, 24), b.y + 22);
+      if (b.t >= 2.2) { b.state = 'fight'; b.t = 0; this.sayBoss(); }
+      return;
+    }
+    if (b.state === 'shift') {
+      b.flash = Math.sin(b.t * 40) > 0 ? 0.05 : 0;
+      if (b.t > 1.6) { b.state = 'fight'; b.stage = 2; b.t = 0; b.patT = 0.8; b.patIdx = 0; this.sayBoss(); }
+      return;
+    }
+    if (b.state === 'revive') {
+      const k = clamp(b.t / (BOSS.REVIVE_TIME - 0.4), 0, 1);
+      b.hp = Math.round(lerp(b.from, BOSS_HP, easeOutCubic(k))); b.chip = Math.max(b.chip, b.hp);
+      b.flash = Math.sin(b.t * 30) > 0.3 ? 0.05 : 0;
+      if (Math.random() < dt * 40) this.fxBoss.emit({ x: b.x + rand(-22, 22), y: b.y + rand(-10, 20), vx: rand(-10, 10), vy: rand(-70, -40), life: rand(0.5, 0.9), size: Math.random() < 0.4 ? 2 : 1, color: pick([PAL.star, '#ffffff', '#ffb35a']) });
+      this.shake = Math.max(this.shake, 1.5);
+      if (b.t >= BOSS.REVIVE_TIME) { b.state = 'fight'; b.stage++; b.t = 0; b.patT = 0.9; b.patIdx = 0; b.hp = BOSS_HP; this.sayBoss(); }
+      return;
+    }
+    const tune = this.bossTuning();
+    b.x = VIEW_W / 2 + Math.sin(b.t * tune.move) * Math.min(140, 90 + 8 * b.stage);
+    b.y = 48 + Math.sin(b.t * 1.7) * 4;
+    if (Math.random() < dt * 8) this.sprayB(b.x + rand(-24, 24), b.y + 24);
+    if (b.stage >= 2 && (b.steam -= dt) <= 0) {
+      b.steam = Math.max(0.05, 0.14 - 0.015 * b.stage);
+      this.fxBoss.emit({ x: b.x + rand(-10, 10), y: b.y - 28, vx: rand(-10, 10), vy: rand(-30, -15), life: 0.6, size: 2, color: pick(['#ffffff', '#e8e4f4']) });
+    }
+    if (b.state !== 'fight') return;
+    if ((b.bubbleCd -= dt) <= 0) { b.bubbleCd = rand(3.2, 4.8); this.sayBoss(); }
+    b.patT -= dt;
+    if (b.patT <= 0) {
+      const LISTS = [
+        null,
+        ['aimWave', 'waveFan', 'wall', 'aimWave', 'bubbles', 'minion'],
+        ['waveFan', 'wall', 'aimWave', 'big', 'waveFan', 'wall', 'mics', 'minion'],
+        ['wall', 'sweep', 'aimWave', 'waveFan', 'rain', 'wall', 'sweep', 'mics', 'big', 'minion'],
+      ];
+      const list = LISTS[Math.min(b.stage, 3)];
+      this.bossPatternB(list[b.patIdx++ % list.length]);
+      b.patT = tune.every;
+    }
+  }
+  sayBoss() {
+    const b = this.boss, lines = LINES.boss;
+    b.lineIdx = (b.lineIdx + 1) % lines.length;
+    b.bubble = { text: lines[b.lineIdx], t: 2.4, color: '#c2364a' };
+  }
+  bossPatternB(kind) {
+    const b = this.boss, n = b.stage, { speed } = this.bossTuning();
+    const SH = this.shotDefs();
+    const shoot = (k, x, y, vx, vy, extra) => this.bEnemyShots.push(Object.assign({ kind: k, def: SH[k], x, y, vx, vy, t: 0, baseX: x }, extra));
+    const aimAt = (sp) => {
+      const dx = this.bp.x - b.x, dy = SURVIVE.BASE_Y - 12 - b.y - 20, d = Math.hypot(dx, dy) || 1;
+      return [(dx / d) * sp, (dy / d) * sp];
+    };
+    const alive = () => this.boss && this.boss.state === 'fight' && this.state === 'boss';
+    if (kind === 'aimWave') {
+      const count = Math.min(5, 2 + Math.floor((n - 1) / 1.5));
+      for (let i = 0; i < count; i++) this.laterB(i * 0.38, () => { if (!alive()) return; const [vx, vy] = aimAt(88 * speed); shoot('current', this.boss.x, this.boss.y + 20, vx, vy); });
+    } else if (kind === 'waveFan') {
+      const count = Math.min(9, 5 + (n - 1)), spread = Math.min(1.7, 1.05 + 0.12 * n), sp = 78 * speed;
+      for (let i = 0; i < count; i++) { const a = Math.PI / 2 + (i / (count - 1) - 0.5) * spread; shoot('wave', b.x, b.y + 20, Math.cos(a) * sp, Math.sin(a) * sp); }
+      if (n >= 3) this.laterB(0.55, () => { if (!alive()) return; for (let i = 0; i < count - 1; i++) { const a = Math.PI / 2 + ((i + 0.5) / (count - 1) - 0.5) * spread; shoot('wave', this.boss.x, this.boss.y + 20, Math.cos(a) * sp, Math.sin(a) * sp); } });
+    } else if (kind === 'wall') {
+      const walls = n >= 3 ? 2 : 1;
+      for (let w = 0; w < walls; w++) this.laterB(w * 1.25, () => {
+        if (!this.boss) return;
+        const y0 = Math.max(40, this.boss.y + 22);
+        const cols = 14, gap = randInt(2, cols - 4), drift = n >= 2 ? Math.min(30, 12 + 4 * n) : 0, dph = rand(0, 6.3);
+        for (let i = 0; i < cols; i++) if (i !== gap && i !== gap + 1) shoot('wave', 14 + i * ((VIEW_W - 28) / (cols - 1)), y0, 0, 54 * speed, { drift, dph });
+      });
+    } else if (kind === 'sweep') {
+      const count = 14;
+      for (let i = 0; i < count; i++) this.laterB(i * 0.085, () => {
+        if (!alive()) return;
+        const u = i / (count - 1), a = Math.PI / 2 + Math.sin(u * Math.PI * 2) * 0.75;
+        shoot('wave', this.boss.x, this.boss.y + 20, Math.cos(a) * 85 * speed, Math.sin(a) * 85 * speed);
+      });
+    } else if (kind === 'bubbles') {
+      for (let i = 0; i < 3; i++) { const a = Math.PI / 2 + (i - 1) * 0.5; shoot('bubble', b.x, b.y + 20, Math.cos(a) * 70, Math.sin(a) * 70); }
+    } else if (kind === 'mics') {
+      for (let i = 0; i < 3; i++) this.laterB(i * 0.18, () => { if (!alive()) return; const [vx, vy] = aimAt(130 * speed); shoot('mic', this.boss.x, this.boss.y + 14, vx, vy); });
+    } else if (kind === 'big') {
+      shoot('big', VIEW_W * 0.28, 28, 0, 36 * speed); shoot('big', VIEW_W * 0.72, 28, 0, 36 * speed);
+    } else if (kind === 'rain') {
+      for (let i = 0; i < 8; i++) this.laterB(i * 0.13, () => shoot('flyer', rand(20, VIEW_W - 20), 18, 0, rand(50, 66)));
+    } else if (kind === 'minion') {
+      // councillor minion throwers (no legislators)
+      this.spawnBMinion(pick(['jian', 'he', 'xu']));
+    }
+  }
+  shotDefs() {
+    return {
+      mic:    { frames: () => MX.mic, fdur: 0.07, hw: 2, hh: 3 },
+      bubble: { frames: () => [MX.bian], hw: 6, hh: 5, wobble: 10 },
+      flyer:  { frames: () => MX.flyer, fdur: 0.14, hw: 3, hh: 3, sway: 22 },
+      wave:   { frames: () => MX.miniWave, fdur: 0.12, hw: 5, hh: 3 },
+      current:{ frames: () => SPR.wave, fdur: 0.09, hw: 8, hh: 4 },
+      big:    { frames: () => [SPR.bubble], hw: 24, hh: 8, wobble: 14 },
+    };
+  }
+  spawnBMinion(kind) {
+    const fromLeft = Math.random() < 0.5;
+    this.bMinions.push({
+      kind, x: fromLeft ? -20 : VIEW_W + 20, y: rand(70, 120),
+      vx: fromLeft ? 70 : -70, t: 0, fireIn: 0.6, face: fromLeft ? 1 : -1,
+    });
+  }
+  updateBMinions(dt) {
+    for (let i = this.bMinions.length - 1; i >= 0; i--) {
+      const m = this.bMinions[i];
+      m.t += dt; m.x += m.vx * dt; m.y += Math.sin(m.t * 3) * 10 * dt;
+      m.fireIn -= dt;
+      if (m.fireIn <= 0 && m.x > 10 && m.x < VIEW_W - 10) {
+        m.fireIn = rand(1.0, 1.6);
+        const SH = this.shotDefs();
+        const k = { jian: 'bubble', he: 'flyer', xu: 'wave' }[m.kind] || 'mic';
+        const dx = this.bp.x - m.x, dy = SURVIVE.BASE_Y - 12 - m.y, d = Math.hypot(dx, dy) || 1;
+        this.bEnemyShots.push({ kind: k, def: SH[k], x: m.x, y: m.y + 8, vx: (dx / d) * 90, vy: (dy / d) * 90, t: 0, baseX: m.x });
+      }
+      if (m.x < -40 || m.x > VIEW_W + 40) this.bMinions.splice(i, 1);
+    }
+  }
+  damageBossB(n) {
+    const b = this.boss;
+    if (!b || b.state !== 'fight' || this.bp.ko) return false;
+    b.hp = Math.max(1, b.hp - n); b.flash = 0.05;
+    this.score += 10;
+    if (b.stage === 1 && b.hp <= BOSS_HP / 2) {
+      b.state = 'shift'; b.t = 0; this.shake = 6; this.flash = 0.5; this.flashColor = '255,120,120';
+      this.clearBEnemyShots(); this.bPending.length = 0;
+      this.banner = { title: stageName(2) + '！', sub: '沈伯洋 開始認真了', t: 0, dur: 1.8, style: 'boss' };
+    } else if (b.hp <= BOSS_HP * BOSS.REVIVE_AT) this.reviveBossB();
+    return true;
+  }
+  reviveBossB() {
+    const b = this.boss;
+    b.state = 'revive'; b.t = 0; b.revives++; b.from = b.hp;
+    this.shake = 7; this.flash = 0.7; this.flashColor = '255,214,90';
+    this.clearBEnemyShots(); this.bPending.length = 0;
+    this.score += 1000;
+    this.banner = { title: `${NAMES.boss} 滿血復活！`, sub: `票數翻盤！ → ${stageName(b.stage + 1)}`, t: 0, dur: 2.2, style: 'revive' };
+  }
+  hurtBossPlayer() {
+    const p = this.bp;
+    if (p.invuln > 0 || p.ko || this.debug.god) return;
+    this.lives--;
+    this.shake = 5; this.flash = 0.4; this.flashColor = '255,110,130';
+    p.hurtT = 0.7; p.invuln = SURVIVE.INVULN;
+    this.clearBEnemyShots();
+    if (this.lives <= 0) { p.ko = true; this.overIn = 1.6; this.bShots.length = 0; }
+  }
+  triggerFakeWin() {
+    this.state = 'bossWin'; this.stateT = 0;
+    this.bPending.length = 0; this.bEnemyShots.length = 0; this.bShots.length = 0; this.bMinions.length = 0;
+    this.banner = null;
+    this.confettiB(70);
+    this.shake = 3; this.flash = 0.4; this.flashColor = '255,226,122';
+    this.score += 5000;
+  }
+  updateFakeWin(dt) {
+    this.fxBoss.update(dt);
+    if (Math.random() < dt * 5) this.confettiB(3);
+    if (this.stateT >= 1.7) this.startColdWater();
+  }
+  startColdWater() {
+    this.state = 'coldwater'; this.stateT = 0;
+    this.fxBoss.clear();
+    const who = pick(ENDERS);
+    this.cold = { who, t: 0, phase: 'enter', splash: 0, said: false };
+    this.shake = 2;
+  }
+  updateColdWater(dt) {
+    const c = this.cold; c.t += dt;
+    this.fxBoss.update(dt);
+    if (c.phase === 'enter' && c.t >= 0.55) {
+      c.phase = 'splash'; c.splash = 0;
+      // water splash particles over 萬安
+      for (let i = 0; i < 40; i++) {
+        this.fxBoss.emit({
+          x: VIEW_W / 2 + rand(-18, 18), y: 90 + rand(-10, 10),
+          vx: rand(-80, 80), vy: rand(40, 140), g: 220, drag: 1,
+          life: rand(0.5, 1.0), size: Math.random() < 0.4 ? 2 : 1,
+          color: pick(['#7ec8ff', '#b8e4ff', '#ffffff', '#4aa3f0']),
+        });
+      }
+      this.shake = 6; this.flash = 0.55; this.flashColor = '100,180,255';
+    }
+    if (c.phase === 'splash') {
+      c.splash += dt;
+      if (c.splash >= 0.35 && !c.said) { c.said = true; c.phase = 'line'; }
+    }
+    if (c.phase === 'line' && c.t >= 3.2) {
+      this.endColdCard();
+    }
+  }
+  endColdCard() {
     this.score = Math.floor(this.score);
     this.saveHi();
+    this.state = 'winFinal'; this.stateT = 0; this.paused = false; this.banner = null;
+    this.acceptAt = null; this.stamped = false; this.cardFx.clear();
+  }
+  /** Death end (敗選). `fromBoss` notes the boss stage on the card. */
+  endGame(fromBoss = false) {
+    if (this.state === 'over' || this.state === 'winFinal') return;
+    this.score = Math.floor(this.score);
+    this.saveHi();
+    this.diedInBoss = !!fromBoss || this.state === 'boss';
     this.state = 'over'; this.stateT = 0; this.paused = false; this.banner = null; this.seq = null; this.alarm = false;
     this.acceptAt = null; this.stamped = false; this.cardFx.clear();
   }
+
   updateEnd(dt) {
     const T = this.stateT;
     if (!this.stamped && T >= CARD.STAMP + CARD.SLAM) {
       this.stamped = true; this.shake = 5;
-      const c = this.cardLayout();
+      const cx = VIEW_W / 2, cy = this.state === 'winFinal' ? 114 : this.cardLayout().stampY;
       for (let i = 0; i < 26; i++) {
         const a = rand(0, Math.PI * 2), r = rand(26, 40);
-        this.cardFx.emit({ x: c.stampX + Math.cos(a) * r, y: c.stampY + Math.sin(a) * r * 0.6, vx: Math.cos(a) * rand(20, 60), vy: Math.sin(a) * rand(15, 40), drag: 4, life: rand(0.3, 0.6), size: Math.random() < 0.4 ? 2 : 1, color: pick(['#d8343f', '#f08a8f', '#ffffff']) });
+        this.cardFx.emit({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r * 0.6, vx: Math.cos(a) * rand(20, 60), vy: Math.sin(a) * rand(15, 40), drag: 4, life: rand(0.3, 0.6), size: Math.random() < 0.4 ? 2 : 1, color: pick(this.state === 'winFinal' ? ['#2a5aaa', '#7ec8ff', '#ffffff'] : ['#d8343f', '#f08a8f', '#ffffff']) });
       }
     }
     if (this.acceptAt === null && T >= CARD.LOCK) this.acceptAt = performance.now();
@@ -1892,22 +2591,38 @@ class Game {
     ctx.fillStyle = '#1b1932'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     ctx.save();
     if (this.shake > 0) ctx.translate(snap(rand(-1, 1) * this.shake * 0.5), snap(rand(-1, 1) * this.shake * 0.5));
-    this.drawWorld(ctx);
+    if (this.state === 'boss' || this.state === 'bossWin' || this.state === 'coldwater') this.drawBossWorld(ctx);
+    else this.drawWorld(ctx);
     ctx.restore();
     if (this.flash > 0) { ctx.fillStyle = `rgba(${this.flashColor},${this.flash * 0.45})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
     if (this.state === 'playing') {
       if (this.alarmLevel > 0) { ctx.globalAlpha = this.alarmLevel * (0.55 + 0.3 * Math.sin(this.time * 8)); ctx.drawImage(this.vignette, 0, 0); ctx.globalAlpha = 1; }
+      if (this.currentWarnFlash > 0) {
+        const a = (this.currentWarnFlash / CURRENT.WARN) * (0.45 + 0.35 * Math.sin(this.time * 18));
+        ctx.fillStyle = `rgba(220,40,50,${a})`;
+        ctx.fillRect(0, 0, VIEW_W, 4); ctx.fillRect(0, VIEW_H - 4, VIEW_W, 4);
+        ctx.fillRect(0, 0, 4, VIEW_H); ctx.fillRect(VIEW_W - 4, 0, 4, VIEW_H);
+      }
       if (!this.seq || this.seq.type !== 'iris') this.drawArrows(ctx);
       this.drawHud(ctx);
+      this.drawChopUI(ctx);
       this.drawToasts(ctx);
       if (this.input.touchUI) this.drawTouch(ctx);
       if (this.seq && this.seq.type === 'caught') this.drawCaught(ctx);
       if (this.banner) this.drawBanner(ctx);
       if (this.seq && this.seq.type === 'iris') this.drawIris(ctx);
     }
+    if (this.state === 'boss') {
+      this.drawBossHud(ctx);
+      if (this.banner) this.drawBanner(ctx);
+      if (this.paused) this.drawPause(ctx);
+    }
+    if (this.state === 'bossWin') this.drawFakeWin(ctx);
+    if (this.state === 'coldwater') this.drawColdWater(ctx);
     if (this.state === 'title') this.drawTitle(ctx);
     if (this.state === 'over') { this.drawHud(ctx); this.drawCard(ctx); }
-    if (this.paused) this.drawPause(ctx);
+    if (this.state === 'winFinal') this.drawWinFinal(ctx);
+    if (this.paused && this.state === 'playing') this.drawPause(ctx);
   }
 
   drawWorld(ctx) {
@@ -1939,6 +2654,7 @@ class Game {
     list.push([this.exit.y + (this.exit.run ? this.exit.run.dy : 0), () => this.drawExit(ctx, ox, oy)]);
     for (const r of this.rats) list.push([r.y, () => this.drawRat(ctx, r, ox, oy)]);
     for (const c of this.chasers) list.push([c.y, () => this.drawChaser(ctx, c, ox, oy)]);
+    for (const cur of this.currents) list.push([cur.y, () => this.drawCurrent(ctx, cur, ox, oy)]);
     list.push([this.p.y, () => this.drawPlayer(ctx, ox, oy)]);
     if (this.minion) list.push([this.minion.y, () => this.drawMinion(ctx, ox, oy)]);
     for (const s of this.shots) list.push([s.y, () => this.drawShot(ctx, s, ox, oy)]);
@@ -1983,6 +2699,32 @@ class Game {
     const hop = c.mode === 'chase' ? Math.round(Math.abs(Math.sin(c.anim * 12))) : 0;
     c.spr = s; c.sx = snap(x - s.w / 2); c.sy = snap(y - s.h - hop);
     ctx.drawImage(s.canvas, c.sx, c.sy);
+  }
+  drawCurrent(ctx, c, ox, oy) {
+    const x = c.x - ox, y = c.y - oy;
+    if (x < -40 || y < -40 || x > VIEW_W + 40 || y > VIEW_H + 40) return;
+    const wv = (MX.miniWave || SPR.wave)[Math.floor(c.anim / 0.12) % (MX.miniWave || SPR.wave).length];
+    const a = c.mode === 'warn' ? 0.35 + 0.35 * Math.sin(c.t * 12) : (c.slowT > 0 ? 0.7 : 1);
+    ctx.globalAlpha = a;
+    // big 洋流 blob
+    const sc = c.mode === 'warn' ? 1.2 : 1.6;
+    ctx.drawImage(wv.canvas, snap(x - wv.w * sc / 2), snap(y - wv.h * sc / 2), wv.w * sc, wv.h * sc);
+    if (SPR.wave) {
+      const w2 = SPR.wave[Math.floor(c.anim / 0.09) % SPR.wave.length];
+      ctx.drawImage(w2.canvas, snap(x - w2.w), snap(y - w2.h / 2), w2.w * 2, w2.h * 1.4);
+    }
+    ctx.globalAlpha = 1;
+    if (c.mode === 'warn') {
+      drawZh(ctx, '洋流', x, y - 18, { align: 'center', size: 10, weight: 'bold', color: '#7ec8ff', outline: PAL.ink });
+      // direction arrow toward player
+      const ang = c.warnDir;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+      ctx.fillStyle = '#ff5a5a';
+      ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(6, -5); ctx.lineTo(6, 5); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    } else {
+      drawZh(ctx, '洋流', x, y - 16, { align: 'center', size: 10, weight: '900', color: '#ff8a7a', outline: PAL.ink });
+    }
   }
   drawRat(ctx, r, ox, oy) {
     const x = r.x - ox, y = r.y - oy + 3;
@@ -2167,6 +2909,12 @@ class Game {
       if (c.mode === 'chase') marks.push({ sx, sy, col: '#ff4a4a', size: 6, label: '！', lc: '#ffffff' });
       else if (d < TILE * 10) marks.push({ sx, sy, col: c.boss ? '#ff9a8a' : '#c8d0f0', size: 4, alpha: 0.7 });
     }
+    for (const c of this.currents) {
+      if (c.mode !== 'rush' && c.mode !== 'warn') continue;
+      const sx = c.x - ox, sy = c.y - oy;
+      if (sx > -4 && sy > HUD_H - 6 && sx < VIEW_W + 4 && sy < VIEW_H + 14) continue;
+      marks.push({ sx, sy, col: '#4aa3f0', size: 6, label: '洋流', lc: '#7ec8ff', door: true });
+    }
     const e = this.exit;
     if (!e.run) {
       const sx = e.x - ox, sy = e.y - oy;
@@ -2249,15 +2997,38 @@ class Game {
       ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 0.5, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
       if (b.id === 'pause') { ctx.fillStyle = '#ffffff'; ctx.fillRect(b.x - 3, b.y - 3, 2, 6); ctx.fillRect(b.x + 1, b.y - 3, 2, 6); continue; }
+      if (b.id === 'chop') {
+        drawZh(ctx, '砍', b.x, b.y - 6, { align: 'center', size: 12, weight: '900', color: this.input.chopTouch ? '#ffd45e' : '#a8e89a', outline: PAL.ink });
+        continue;
+      }
       const s = b.id === 'squid' ? MX.squid : MX.bigBerry, n = this.inv[b.id];
       ctx.globalAlpha = n ? 1 : 0.4; ctx.drawImage(s.canvas, Math.round(b.x - s.w / 2), Math.round(b.y - s.h / 2)); ctx.globalAlpha = 1;
       drawText(ctx, String(n), b.x + b.r - 6, b.y + b.r - 8, { color: '#ffffff', outline: PAL.ink });
     }
   }
+  drawChopUI(ctx) {
+    const ox = this.ox || 0, oy = this.oy || 0;
+    const tree = this.chopTarget || this.faceTree();
+    if (!tree) return;
+    const cx = tree.x * TILE + 10 - ox, cy = tree.y * TILE + 4 - oy;
+    const hp = this.treeHp[tree.i] == null ? TREE.MAX_HP : this.treeHp[tree.i];
+    const pct = clamp(hp / TREE.MAX_HP, 0, 1);
+    // HP bar
+    const bw = 22, bh = 4, bx = Math.round(cx - bw / 2), by = Math.round(cy - 18);
+    pixelRect(ctx, bx - 1, by - 1, bw + 2, bh + 2, PAL.ink);
+    ctx.fillStyle = '#3a3050'; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = pct > 0.4 ? '#7fe08a' : '#ffd45e'; ctx.fillRect(bx, by, Math.round(bw * pct), bh);
+    if (this.chopping && (this.input.space || this.input.chopTouch)) {
+      // shake the bar while cutting
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(bx, by, Math.round(bw * (1 - pct)), 1);
+    } else {
+      drawZh(ctx, '按住空白鍵砍樹', cx, by - 12, { align: 'center', size: 10, weight: 'bold', color: '#a8e89a', outline: PAL.ink });
+    }
+  }
   drawBanner(ctx) {
     const B = this.banner, t = B.t, inK = easeOutBack(clamp(t / 0.3, 0, 1)), outK = clamp((B.dur - t) / 0.3, 0, 1);
     const cy = 78, h = 46, y = cy - h / 2, slide = Math.round((1 - inK) * -VIEW_W + (1 - outK) * VIEW_W);
-    const C = { gold: ['#2b2a5a', '#ffd45e'], red: ['#a8232e', '#ffd45e'], brown: ['#5a3a2a', '#ffb07a'] }[B.style] || ['#2b2a5a', '#ffd45e'];
+    const C = { gold: ['#2b2a5a', '#ffd45e'], red: ['#a8232e', '#ffd45e'], brown: ['#5a3a2a', '#ffb07a'], boss: ['#4a2a6a', '#ff8a7a'], revive: ['#a8232e', '#ffe36a'] }[B.style] || ['#2b2a5a', '#ffd45e'];
     ctx.save(); ctx.translate(slide, 0);
     ctx.globalAlpha = 0.92; ctx.fillStyle = C[0]; ctx.fillRect(0, y, VIEW_W, h); ctx.globalAlpha = 1;
     ctx.fillStyle = C[1]; ctx.fillRect(0, y, VIEW_W, 2); ctx.fillRect(0, y + h - 2, VIEW_W, 2);
@@ -2321,6 +3092,180 @@ class Game {
     ctx.fillStyle = '#c8902e'; ctx.fillRect(x + 1, y + 6, 3, 8); ctx.fillRect(x + 6, y + 6, 3, 8);
     pixelRect(ctx, x - 2, y - 1, 14, 5, PAL.ink); ctx.fillStyle = '#d8343f'; ctx.fillRect(x - 1, y, 12, 3);
   }
+
+  // ── Boss-phase rendering ──
+  drawBossWorld(ctx) {
+    // soft council-hall backdrop (readable, not too dark)
+    const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+    g.addColorStop(0, '#3a3560'); g.addColorStop(0.45, '#2a2850'); g.addColorStop(1, '#1e1c38');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    // window glow strip
+    ctx.fillStyle = 'rgba(255,210,140,0.12)'; ctx.fillRect(0, 28, VIEW_W, 36);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    for (let x = 20; x < VIEW_W; x += 48) ctx.fillRect(x, 34, 28, 22);
+    // floor band
+    ctx.fillStyle = '#4a4068'; ctx.fillRect(0, SURVIVE.BASE_Y + 2, VIEW_W, VIEW_H - SURVIVE.BASE_Y - 2);
+    ctx.fillStyle = '#5a5080'; ctx.fillRect(0, SURVIVE.BASE_Y + 2, VIEW_W, 2);
+    // shots
+    for (const s of this.bEnemyShots || []) {
+      const fr = s.def.frames(), spr = fr[Math.floor(s.t / (s.def.fdur || 1)) % fr.length];
+      blit(ctx, spr, snap(s.x - spr.w / 2), snap(s.y - spr.h / 2));
+    }
+    for (const s of this.bShots || []) {
+      const spr = MX.milk;
+      ctx.drawImage(spr.canvas, snap(s.x - spr.w / 2), snap(s.y - spr.h / 2));
+    }
+    // minions
+    for (const m of this.bMinions || []) {
+      const C = MX.chars[m.kind];
+      if (!C) continue;
+      const set = C.chase[Math.floor(m.t * 8) % 2];
+      const s = m.face > 0 ? set.r : set.l;
+      ctx.drawImage(s.canvas, snap(m.x - s.w / 2), snap(m.y - s.h / 2));
+      drawNameTag(ctx, NAMES[m.kind], m.x, m.y - s.h / 2 + 2, '#ff8a7a');
+    }
+    // boss
+    if (this.boss) this.drawBossSpr(ctx);
+    // player cannon
+    this.drawCannon(ctx);
+    if (this.fxBoss) this.fxBoss.draw(ctx);
+  }
+  drawBossSpr(ctx) {
+    const b = this.boss;
+    const bob = Math.round(Math.sin(this.time * 3) * 1);
+    const wv = SPR.wave[Math.floor(this.time / 0.09) % SPR.wave.length];
+    ctx.drawImage(wv.canvas, snap(b.x - wv.w - 4), snap(b.y + 14 + bob), wv.w * 2, wv.h * 2);
+    const frames = b.stage >= 2 ? MX.bossSpr.fired : MX.bossSpr.calm;
+    const s = frames[Math.floor(this.time / 0.4) % 2];
+    const img = b.flash > 0 ? (() => {
+      // inline white flash without dedicated cache miss
+      return s.canvas;
+    })() : s.canvas;
+    if (b.flash > 0) ctx.globalAlpha = 0.7;
+    ctx.drawImage(img, snap(b.x - s.w), snap(b.y - s.h * 2 + 16 + bob), s.w * 2, s.h * 2);
+    ctx.globalAlpha = 1;
+    if (b.state === 'revive') {
+      const k = clamp(b.t / 0.4, 0, 1), r = 18 + 10 * k;
+      ctx.globalAlpha = 0.5 * (1 - clamp((b.t - 1.2) / 0.7, 0, 1));
+      ctx.strokeStyle = PAL.star; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(b.x, b.y - 4, r, r * 1.15, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    if (b.bubble) this.drawBubble(ctx, b.bubble, b.x, b.y - 36, []);
+    drawZh(ctx, '魔王 ' + NAMES.boss, b.x, b.y - 40 - (b.bubble ? 16 : 0), { align: 'center', color: '#ffd45e', outline: PAL.ink, weight: 'bold', size: 10 });
+  }
+  drawCannon(ctx) {
+    const p = this.bp; if (!p) return;
+    if (p.invuln > 0 && !p.ko && Math.floor(p.invuln * 16) % 2 === 0) return;
+    let spr;
+    if (this.state === 'coldwater' && this.cold && this.cold.phase !== 'enter') spr = MX.cannon.wet;
+    else if (p.ko || p.hurtT > 0) spr = MX.cannon.ko;
+    else spr = MX.cannon[p.blinkT > 0 ? 'closed' : 'open'][Math.floor(p.roll / 3) % 2];
+    const left = p.x - spr.w / 2, top = SURVIVE.BASE_Y - spr.h + 1 + (p.recoil > 0 ? 1 : 0);
+    ctx.fillStyle = 'rgba(20,16,40,0.35)'; ctx.fillRect(snap(p.x - 14), SURVIVE.BASE_Y + 1, 28, 2);
+    ctx.drawImage(spr.canvas, snap(left), snap(top));
+    if (p.flash[0] > 0) ctx.drawImage(MX.muzzle.canvas, snap(p.x - 11.5 - 2.5), snap(top - 3));
+    if (p.flash[1] > 0) ctx.drawImage(MX.muzzle.canvas, snap(p.x + 10.5 - 2.5), snap(top - 3));
+  }
+  drawBossHud(ctx) {
+    drawText(ctx, String(Math.floor(this.score)).padStart(6, '0'), 6, 5, { color: '#ffffff', outline: PAL.ink });
+    drawText(ctx, 'HI ' + String(this.hi).padStart(6, '0'), VIEW_W - 6, 5, { color: '#ffe9a8', outline: PAL.ink, align: 'right' });
+    for (let i = 0; i < PLAYER.LIVES; i++) ctx.drawImage((i < this.lives ? MX.heart : MX.heartEmpty).canvas, VIEW_W - 12 - i * 10, 15);
+    const b = this.boss;
+    if (b && b.state !== 'gone') {
+      const W = 180, x = Math.round((VIEW_W - W) / 2), y = 22;
+      pixelRect(ctx, x - 1, y - 1, W + 2, 7, PAL.ink);
+      ctx.fillStyle = '#3a3050'; ctx.fillRect(x, y, W, 5);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, Math.round((W * b.chip) / BOSS_HP), 5);
+      const barCol = b.state === 'revive' ? (Math.sin(this.time * 30) > 0 ? '#ffe36a' : '#ffffff') : ['#ff9a4a', '#ff9a4a', '#ff5a6e', '#d04ad8', '#5a6aff'][Math.min(4, b.stage)];
+      ctx.fillStyle = barCol; ctx.fillRect(x, y, Math.round((W * b.hp) / BOSS_HP), 5);
+      ctx.fillStyle = 'rgba(42,36,51,0.6)'; ctx.fillRect(x + Math.round(W * BOSS.REVIVE_AT), y, 1, 5);
+      if (b.revives > 0) drawZh(ctx, `復活 ×${b.revives}`, x, 12, { size: 10, color: '#ffffff', outline: PAL.ink, weight: 'bold' });
+      if (b.stage >= 2) drawZh(ctx, stageName(b.stage), x + W, 12, { size: 10, color: '#ff8a7a', outline: PAL.ink, weight: 'bold', align: 'right' });
+    }
+    // survival progress 「撐住！開票中 xx%」
+    const pct = clamp(this.surviveT / SURVIVE.NEED, 0, 1);
+    const bw = 160, bx = Math.round((VIEW_W - bw) / 2), by = VIEW_H - 14;
+    pixelRect(ctx, bx - 1, by - 1, bw + 2, 8, PAL.ink);
+    ctx.fillStyle = '#2a2440'; ctx.fillRect(bx, by, bw, 6);
+    ctx.fillStyle = pct >= 1 ? '#5fd38a' : '#ffd45e'; ctx.fillRect(bx, by, Math.round(bw * pct), 6);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(bx, by, Math.round(bw * pct), 1);
+    drawZh(ctx, `撐住！開票中 ${Math.floor(pct * 100)}%`, VIEW_W / 2, by - 12, { align: 'center', size: 10, color: '#ffffff', outline: PAL.ink, weight: 'bold' });
+  }
+  drawFakeWin(ctx) {
+    ctx.fillStyle = 'rgba(20,16,40,0.35)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    if (this.fxBoss) this.fxBoss.draw(ctx);
+    const a = clamp(this.stateT * 4, 0, 1);
+    drawZh(ctx, '當選！連任成功！', VIEW_W / 2, VIEW_H / 2 - 10, { align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.4)', scale: 2, size: 14, weight: 'bold', alpha: a });
+    drawZh(ctx, '台北市開票完成', VIEW_W / 2, VIEW_H / 2 + 28, { align: 'center', color: '#ffffff', outline: PAL.ink, alpha: a });
+    // celebratory stamp flash
+    const S = MX.stampWin, k = clamp((this.stateT - 0.4) / 0.25, 0, 1);
+    if (k > 0) {
+      const sc = 0.6 + 0.4 * easeOutBack(k);
+      ctx.save(); ctx.translate(VIEW_W / 2 + 70, VIEW_H / 2 + 10); ctx.scale(sc, sc);
+      ctx.globalAlpha = Math.min(1, k * 2); ctx.drawImage(S.canvas, -S.w / 2, -S.h / 2); ctx.restore();
+    }
+  }
+  drawColdWater(ctx) {
+    // keep boss world underlay faintly
+    this.drawBossWorld(ctx);
+    const c = this.cold; if (!c) return;
+    const who = c.who;
+    const spr = (c.phase === 'splash' || c.phase === 'line') ? MX.ender[who].splash : MX.ender[who].stand;
+    const enterX = lerp(-40, VIEW_W / 2 + 50, easeOutCubic(clamp(c.t / 0.5, 0, 1)));
+    const x = c.phase === 'enter' ? enterX : VIEW_W / 2 + 50;
+    const y = 130;
+    // bucket overhead
+    if (c.phase !== 'enter' || c.t > 0.35) {
+      const bx = x - 8, by = y - spr.h - 14 + (c.phase === 'splash' && c.splash < 0.25 ? Math.sin(c.splash * 40) * 3 : 0);
+      ctx.drawImage(MX.bucket.canvas, snap(bx - MX.bucket.w / 2), snap(by));
+    }
+    ctx.drawImage(spr.canvas, snap(x - spr.w / 2), snap(y - spr.h));
+    drawZh(ctx, ENDER_NAMES[who], x, y - spr.h - 6, { align: 'center', color: '#ffd45e', outline: PAL.ink, weight: 'bold', size: 11 });
+    // wet 萬安 already drawn via cannon.wet in drawBossWorld path — redraw wet on top
+    if (c.phase !== 'enter') {
+      const p = this.bp;
+      if (p) {
+        const s = MX.cannon.wet;
+        ctx.drawImage(s.canvas, snap(p.x - s.w / 2), snap(SURVIVE.BASE_Y - s.h + 1));
+      }
+    }
+    if (c.said) {
+      const a = clamp((c.t - 0.9) * 3, 0, 1);
+      // speech bubble for the line
+      this.drawBubble(ctx, { text: '上當了吧！', t: 2, color: '#2a5aaa' }, x - 10, y - spr.h - 8, []);
+      drawZh(ctx, ENDER_LINE, VIEW_W / 2, VIEW_H - 28, { align: 'center', color: '#ffffff', outline: PAL.ink, weight: 'bold', size: 11, alpha: a });
+    }
+    if (this.fxBoss) this.fxBoss.draw(ctx);
+  }
+  drawWinFinal(ctx) {
+    const T = this.stateT, cx = VIEW_W / 2;
+    const y = 18;
+    ctx.fillStyle = 'rgba(16,14,32,0.72)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    // card
+    const cw = 280, ch = 168, x0 = Math.round(cx - cw / 2), y0 = y + 8;
+    pixelRect(ctx, x0, y0, cw, ch, '#fff8ee');
+    pixelRect(ctx, x0 + 3, y0 + 3, cw - 6, ch - 6, '#fff8ee');
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth = 2; ctx.strokeRect(x0 + 0.5, y0 + 0.5, cw - 1, ch - 1);
+    drawZh(ctx, '2028 開票結果', cx, y0 + 22, { align: 'center', color: PAL.ink, weight: 'bold', size: 14 });
+    drawZh(ctx, '恭喜你撐過辯論…但', cx, y0 + 44, { align: 'center', color: '#8a7f98', size: 11 });
+    const S = MX.stamp2028;
+    if (!this.stamped && T >= CARD.STAMP) {
+      // slam handled in updateEnd
+    }
+    const st = Math.max(0, T - CARD.STAMP);
+    if (st > 0) {
+      const f = clamp(st / CARD.SLAM, 0, 1), sc = 1.6 - 0.6 * easeOutBack(f);
+      ctx.save(); ctx.translate(cx, y0 + 88); ctx.scale(sc, sc); ctx.globalAlpha = Math.min(1, f * 3);
+      ctx.drawImage(S.canvas, -S.w / 2, -S.h / 2); ctx.restore();
+    }
+    drawZh(ctx, `得分 ${Math.floor(this.score)}`, cx, y0 + 128, { align: 'center', color: PAL.ink, weight: 'bold' });
+    if (this.acceptAt !== null) {
+      const a = Math.min(1, (T - CARD.LOCK) * 3);
+      drawPrompt(ctx, '按', '空白鍵', '再戰連任', cx, y0 + ch + 14, '#ffffff', a, this.time % 1.1 < 0.18);
+    }
+    this.cardFx.draw(ctx);
+  }
+
   drawTitle(ctx) {
     ctx.fillStyle = 'rgba(14,16,40,0.34)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     const bob = Math.round(Math.sin(this.time * 2.2) * 1.2);
@@ -2329,9 +3274,9 @@ class Game {
     // left: who's after you
     this.panel(ctx, 8, 66, 188, 104);
     drawZh(ctx, '議員追兵', 16, 71, { size: 11, weight: 'bold', color: '#ff9a8a' });
-    const cast = ['wang', 'jian', 'he', 'xu', 'boss'];
+    const cast = ['jian', 'he', 'xu', 'boss'];
     cast.forEach((k, i) => {
-      const cx = 28 + i * 37, by = 126, set = MX.chars[k].walk[Math.floor(this.time * 5 + i) % 4], s = set.r;
+      const cx = 32 + i * 42, by = 126, set = MX.chars[k].walk[Math.floor(this.time * 5 + i) % 4], s = set.r;
       this.shadow(ctx, cx, by - 1);
       this.put(ctx, s, cx, by);
       drawZh(ctx, NAMES[k], cx, by + 4, { size: 10, weight: 'bold', align: 'center', color: k === 'boss' ? '#ff8a8a' : '#ffffff' });
@@ -2353,7 +3298,7 @@ class Game {
       drawZh(ctx, desc, cx + 10, cy + 11, { size: 10, color: '#c8c4dc' });
     });
     this.panel(ctx, 8, 174, 384, 28);
-    drawZh(ctx, '方向鍵 / WASD 移動・空白鍵 / J 丟小卷・K 丟大藍莓・P 暫停', VIEW_W / 2, 177, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
+    drawZh(ctx, '方向鍵移動・空白鍵丟小卷／按住砍樹・J 小卷・K 大藍莓・P 暫停', VIEW_W / 2, 177, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
     drawZh(ctx, '手機：左側拖曳移動・右下按鈕丟道具・點一下開始', VIEW_W / 2, 189, { size: 10, align: 'center', color: '#c8c4dc' });
     drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, 208, '#ffffff', 1, this.time % 1.1 < 0.18, true);
     if (this.hi > 0) drawText(ctx, 'HI ' + String(this.hi).padStart(6, '0'), VIEW_W - 6, 5, { align: 'right', color: '#ffe9a8', outline: PAL.ink });
@@ -2416,7 +3361,10 @@ class Game {
     if (this.stamped) {
       const qa = clamp((st - CARD.SLAM) * 4, 0, 1);
       drawZh(ctx, '明年再戰！', stX, y + 112, { size: 12, weight: 'bold', align: 'center', color: '#c8414b', alpha: qa });
-      drawZh(ctx, `止步第 ${this.lv.n} 關`, stX, y + 127, { size: 10, align: 'center', color: '#8a7f98', alpha: qa });
+      const stop = this.diedInBoss
+        ? `止步魔王戰・復活 ${this.boss ? this.boss.revives : 0} 次`
+        : `止步第 ${this.lv.n} 關`;
+      drawZh(ctx, stop, stX, y + 127, { size: 10, align: 'center', color: this.diedInBoss ? '#c4472f' : '#8a7f98', alpha: qa });
     }
     ctx.fillStyle = '#eadcc0'; ctx.fillRect(x + 10, y + 142, W - 20, 1);
     const colL = cx - 72, colR = cx + 72;
@@ -2464,7 +3412,7 @@ requestAnimationFrame(frame);
 // Debug / test hooks.
 const tc = (tx, ty) => ({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 });
 window.wananMaze = {
-  game, MX, SPR, TILE,
+  game, MX, SPR, TILE, SURVIVE, BOSS_HP, ENDERS, ENDER_NAMES,
   teleport(tx, ty) { const c = tc(tx, ty); game.p.x = c.x; game.p.y = c.y; game.updateFields(); game.updateCamera(0, true); game.computeLight(); },
   face(dx, dy) { const p = game.p; p.fx = dx; p.fy = dy; p.ang = Math.atan2(dy, dx); if (dx) p.face = dx > 0 ? 1 : -1; game.computeLight(); },
   tileOf(x, y) { return [Math.floor(x / TILE), Math.floor(y / TILE)]; },
@@ -2474,7 +3422,29 @@ window.wananMaze = {
   give(kind, n) { game.inv[kind] = n; },
   setBattery(v) { game.battery = v; },
   cutTrees(n) { return game.startCut(n); },
+  spawnCurrent(tx, ty) {
+    if (tx != null) return game.spawnCurrent(ty * game.lv.w + tx);
+    return game.spawnCurrent();
+  },
+  faceTree() { return game.faceTree(); },
   ratWave() { game.startRatWave(); },
+  /** Jump straight into the Galaga boss fight (after level 3 clear). */
+  startBoss(lives) {
+    game.paused = false; game.seq = null; game.banner = null;
+    if (lives != null) game.lives = lives;
+    else if (game.lives <= 0) game.lives = PLAYER.LIVES;
+    game.score = Math.max(game.score, 1000);
+    game.bossReached = true; game.beginBossTransition();
+  },
+  /** Fast-forward survival clock almost to the fake-win threshold. */
+  almostSurvive(sec) { if (game.state === 'boss') game.surviveT = Math.max(0, (sec != null ? sec : SURVIVE.NEED - 1.2)); },
+  forceSurvive() { if (game.state === 'boss') { game.surviveT = SURVIVE.NEED; game.surviveDone = false; game.triggerFakeWin(); } },
+  forceCold(who) {
+    if (game.state !== 'boss' && game.state !== 'bossWin' && game.state !== 'coldwater') game.startBoss(3);
+    game.triggerFakeWin(); game.stateT = 99; game.startColdWater();
+    if (who && ENDERS.includes(who)) game.cold.who = who;
+  },
+  killInBoss() { if (game.state === 'boss') { game.lives = 0; game.bp.ko = true; game.overIn = 0.05; } },
   /** A straight corridor run of `len` open tiles from the player, in any of the 4 directions. */
   corridor(len) {
     const [px, py] = this.tileOf(game.p.x, game.p.y);
