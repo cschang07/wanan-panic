@@ -47,19 +47,19 @@ const FEET = 5;                       // sprites stand this far below their grou
 const T_FLOOR = 0, T_WALL = 1, T_TREE = 2, T_UMB = 3;
 const solidT = (t) => t === T_WALL || t === T_TREE;
 
-const PLAYER = { SPEED: 66, LIVES: 3, INVULN: 2.4, HW: 5, HH: 4, SLOW_TIME: 1.2, SLOW: 0.5 };
+const PLAYER = { SPEED: 66, LIVES: 3, INVULN: 2.4, HW: 5, HH: 4, SLOW_TIME: 1.7, SLOW: 0.42 };
 /** Unlit areas stay readable: a ~50% blue-tinted veil, never black. The flashlight punches it out fully. */
-const LIGHT = { DARK: 0.5, TINT: '16,20,54', HALF: 0.52, RANGE: 132, AURA: 34, DRAIN: 1.35, RAYS: 72 };
+const LIGHT = { DARK: 0.5, TINT: '16,20,54', HALF: 0.52, RANGE: 148, AURA: 36, DRAIN: 1.35, RAYS: 72, FADE: 5, SIL_DIST: 5 * TILE, SIL_A: 0.16 };
 const SIGHT = { NEAR: 5.5 * TILE, LIT: 9 * TILE, FORGET: 3.4, BOSS_FORGET: 2.6 };
 // End card timeline (seconds since it opened). Input stays locked until LOCK.
 const CARD = { IN: 0.35, ROW0: 0.4, ROW_DT: 0.13, STAMP: 1.6, SLAM: 0.12, LOCK: 2.0 };
 const STORAGE_HI = 'wanan.maze.hi';
 // Boss phase (Galaga-style dodge after clearing maze level 3). No sound — visual cues only.
 const BOSS_HP = 160;
-const BOSS = { REVIVE_AT: 0.08, REVIVE_TIME: 1.9, MAX_SPEEDUP: 1.5 };
+const BOSS = { REVIVE_AT: 0.08, REVIVE_TIME: 2.1, MAX_SPEEDUP: 1.35 };
 const STAGE_NAMES = ['', '', '認真模式', '翻盤模式', '暴走模式', '海嘯模式'];
 const stageName = (n) => STAGE_NAMES[n] || `無限模式 ${n - 4}`;
-const SURVIVE = { NEED: 105, FIRE: 0.16, SPEED: 150, ACCEL: 1400, BULLET: 280, INVULN: 1.8, BASE_Y: 208 };
+const SURVIVE = { NEED: 50, FIRE: 0.22, SPEED: 145, ACCEL: 1300, BULLET: 240, INVULN: 2.0, BASE_Y: 208 };
 const ENDERS = ['lu', 'han', 'zheng'];   // 盧秀燕 / 韓國瑜 / 鄭麗文 — ending only
 const ENDER_NAMES = { lu: '盧媽媽', han: '韓國瑜', zheng: '鄭麗文' };
 const ENDER_LINE = '上當了吧！繼續當你的台北市長，2028是我的！';
@@ -1329,9 +1329,9 @@ class Particles {
 
 // ────────────────────────────── 7. INPUT ──────────────────────────────
 /**
- * Keyboard: arrows/WASD move, Space/J throws 小卷 (and confirms on menus), K/L/Shift throws 大藍莓,
- * Enter confirms, P/Esc pauses. Touch: drag anywhere on the left 60% for a floating joystick,
- * on-screen buttons for the items; a short tap confirms on menus.
+ * Keyboard: arrows/WASD move; Space confirms menus, taps to auto-throw, holds by a tree to chop.
+ * J / K remain as optional advanced throw keys (小卷 / 大藍莓). P/Esc pauses.
+ * Touch: left drag = joystick; one action button (tap = throw, hold near tree = chop).
  */
 class Input {
   constructor(el, h) {
@@ -1361,7 +1361,7 @@ class Input {
       if (e.pointerType === 'touch' || e.pointerType === 'pen') this.touchUI = true;
       const p = logical(e), now = performance.now();
       const btn = this.touchUI ? h.hitButton(p) : null;
-      if (btn) { h.button(btn); taps.set(e.pointerId, { btn, hold: btn === 'chop' }); return; }
+      if (btn) { h.button(btn); taps.set(e.pointerId, { btn, hold: btn === 'act' || btn === 'chop' }); return; }
       if (e.pointerType !== 'mouse' && !this.joy && h.wantsJoystick(p)) { this.joy = { id: e.pointerId, ox: p.x, oy: p.y, x: p.x, y: p.y, t: now, moved: 0 }; return; }
       taps.set(e.pointerId, { x: p.x, y: p.y, t: now, moved: 0 });
     });
@@ -1417,15 +1417,15 @@ class Game {
     this.debug = { god: false, noEvents: false };
     this.input = new Input(canvas, {
       primary: (t) => this.onPrimary(t),
-      primaryUp: () => { this.chopping = false; },
+      primaryUp: () => { this.chopping = false; this.input.chopTouch = false; },
       throwItem: (t) => { if (this.state === 'playing' && !this.paused) this.throwSquid(); else this.onConfirm(t); },
-      secondary: () => this.throwBerry(),
+      secondary: () => { if (this.state === 'playing' && !this.paused) this.throwBerry(); },
       confirm: (t) => this.onConfirm(t),
       pause: () => this.togglePause(),
       blur: () => { if ((this.state === 'playing' || this.state === 'boss') && !this.paused) this.paused = true; },
       hitButton: (p) => this.hitButton(p),
       button: (b) => this.onButton(b),
-      buttonUp: (b) => { if (b === 'chop') { this.input.chopTouch = false; this.chopping = false; } },
+      buttonUp: (b) => { if (b === 'act' || b === 'chop') { this.input.chopTouch = false; this.chopping = false; } },
       wantsJoystick: (p) => !this.paused && ((this.state === 'playing' && p.x < VIEW_W * 0.62 && p.y > HUD_H) || (this.state === 'boss' && p.y > HUD_H)),
     });
     this.state = 'title'; this.stateT = 0;
@@ -1450,6 +1450,7 @@ class Game {
     this.seq = null; this.banner = null; this.toasts = []; this.alarm = false; this.alarmLevel = 0;
     this.bossReached = false; this.diedInBoss = false; this.boss = null; this.bp = null; this.cold = null;
     this.surviveT = 0; this.surviveDone = false;
+    this.tips = { milk: 0, squid: 0, berry: 0, phone: 0, gold: 0, rat: 0, current: 0, tree: 0, chaser: 0 };
     this.loadLevel(1);
   }
   start() {
@@ -1485,25 +1486,41 @@ class Game {
   }
   onPrimary(t) {
     if (this.state === 'playing' && !this.paused) {
-      if (this.faceTree()) { this.chopping = true; return; }
-      this.throwSquid();
+      // Hold Space by a tree = chop; otherwise Space tap = smart throw.
+      if (this.faceTree()) { this.chopping = true; this.tipOnce('tree', '按住空白鍵砍樹開路！', '#a8e89a'); return; }
+      this.smartThrow();
     } else this.onConfirm(t);
   }
   onConfirm(pressT) {
     if (this.paused) { this.paused = false; return; }
-    if (this.state === 'title') this.start();
+    if (this.state === 'title') { this.state = 'help'; this.stateT = 0; return; }
+    if (this.state === 'help') { this.start(); return; }
     // end cards only close on a fresh press that began after the input lock lifted
     else if ((this.state === 'over' || this.state === 'winFinal') && this.acceptAt !== null && pressT >= this.acceptAt) this.start();
   }
   togglePause() { if (this.state === 'playing' || this.state === 'boss') this.paused = !this.paused; }
+  /** Auto-pick: 大藍莓 if 2+ chasers nearby and you have one; else 小卷; else whatever remains. */
+  smartThrow() {
+    if (this.state !== 'playing' || this.seq || this.paused) return;
+    const p = this.p;
+    const near = this.chasers.filter((c) => c.mode !== 'stun' && c.mode !== 'argue' && Math.hypot(c.x - p.x, c.y - p.y) < TILE * 5.5).length;
+    if (near >= 2 && this.inv.berry > 0) { this.throwBerry(); return; }
+    if (this.inv.squid > 0) { this.throwSquid(); return; }
+    if (this.inv.berry > 0) { this.throwBerry(); return; }
+    this.text('沒有道具了', p.x, p.y - 32, '#ffb0c8', 0.9);
+  }
+  tipOnce(key, msg, color = '#ffd45e') {
+    if (!this.tips) this.tips = {};
+    if (this.tips[key]) return;
+    this.tips[key] = 1;
+    this.toast(msg, color);
+  }
   touchButtons() {
-    const btns = [
-      { id: 'squid', x: VIEW_W - 28, y: VIEW_H - 28, r: 16 },
-      { id: 'berry', x: VIEW_W - 66, y: VIEW_H - 20, r: 12 },
+    const nearTree = this.state === 'playing' && this.faceTree();
+    return [
+      { id: 'act', x: VIEW_W - 30, y: VIEW_H - 30, r: 18, label: nearTree ? '砍' : '丟' },
       { id: 'pause', x: VIEW_W - 14, y: HUD_H + 13, r: 9 },
     ];
-    if (this.state === 'playing' && this.faceTree()) btns.push({ id: 'chop', x: VIEW_W - 104, y: VIEW_H - 28, r: 14, label: '砍' });
-    return btns;
   }
   hitButton(p) {
     if (this.state !== 'playing' || this.paused) return null;
@@ -1511,10 +1528,13 @@ class Game {
     return b ? b.id : null;
   }
   onButton(id) {
-    if (id === 'squid') this.throwSquid();
+    if (id === 'pause') this.togglePause();
+    else if (id === 'act' || id === 'chop') {
+      if (this.faceTree()) { this.input.chopTouch = true; this.chopping = true; this.tipOnce('tree', '按住砍樹開路！', '#a8e89a'); }
+      else this.smartThrow();
+    }
+    else if (id === 'squid') this.throwSquid();
     else if (id === 'berry') this.throwBerry();
-    else if (id === 'pause') this.togglePause();
-    else if (id === 'chop') { this.input.chopTouch = true; this.chopping = true; }
   }
 
   // ── Map helpers ──
@@ -1564,7 +1584,7 @@ class Game {
   placeItems() {
     const lv = this.lv, n = lv.n, used = new Set([lv.exit.y * lv.w + lv.exit.x, lv.start.y * lv.w + lv.start.x]);
     this.items = [];
-    const add = (kind, i, extra = {}) => { if (i >= 0) this.items.push({ kind, x: (i % lv.w) * TILE + TILE / 2, y: ((i / lv.w) | 0) * TILE + TILE / 2, t: Math.random() * 6, cd: 0, ...extra }); };
+    const add = (kind, i, extra = {}) => { if (i >= 0) this.items.push({ kind, x: (i % lv.w) * TILE + TILE / 2, y: ((i / lv.w) | 0) * TILE + TILE / 2, t: Math.random() * 6, cd: 0, vis: 0, ...extra }); };
     for (let k = 0; k < 3; k++) {                               // 特級大果藍莓 hide in dead ends
       let i = this.pickSpread(lv.deadEnds, used, 6, 6);
       if (i < 0) i = this.pickSpread(lv.floors, used, 6, 6);
@@ -1583,7 +1603,7 @@ class Game {
       kind, boss, x, y, tx, ty, ptx: tx, pty: ty, mode: 'wander', modeT: 0, lost: 0, cool: 0,
       wanderSpeed: (boss ? 30 : 25) * lm, chaseSpeed: Math.min(boss ? 70 : 63, (boss ? 61 : 50) * lm),
       face: 1, anim: Math.random() * 4, jit: Math.random() * 6, seeT: Math.random() * 0.2, sees: false,
-      bubble: null, bubbleCd: 0, alertT: 0, mark: '', markT: 0, lineIdx: -1, met: false, argueT: 0, argueFlip: false, spr: null,
+      bubble: null, bubbleCd: 0, alertT: 0, mark: '', markT: 0, lineIdx: -1, met: false, argueT: 0, argueFlip: false, spr: null, vis: 0,
     };
   }
   spawnChasers() {
@@ -1601,7 +1621,7 @@ class Game {
       i = pick(pool);
     }
     const tx = i % lv.w, ty = (i / lv.w) | 0, c = this.tileCenter(tx, ty);
-    this.rats.push({ kind: Math.random() < 0.6 ? 'rat' : 'roach', x: c.x + rand(-3, 3), y: c.y, tx, ty, ptx: tx, pty: ty, mode: wave ? 'wave' : 'roam', t: Math.random() * 3, flee: 0, cool: 0, life: 0, face: 1, counted: false });
+    this.rats.push({ kind: Math.random() < 0.6 ? 'rat' : 'roach', x: c.x + rand(-3, 3), y: c.y, tx, ty, ptx: tx, pty: ty, mode: wave ? 'wave' : 'roam', t: Math.random() * 3, flee: 0, cool: 0, life: 0, face: 1, counted: false, vis: 0 });
   }
 
   // ── Update ──
@@ -1611,7 +1631,7 @@ class Game {
     this.stateT += dt;
     this.shake = Math.max(0, this.shake - dt * 18);
     this.flash = Math.max(0, this.flash - dt * 2.5);
-    if (this.state === 'title') this.updateDemo(dt);
+    if (this.state === 'title' || this.state === 'help') this.updateDemo(dt);
     else if (this.state === 'over' || this.state === 'winFinal') this.updateEnd(dt);
     else if (this.state === 'boss') this.updateBossPhase(dt);
     else if (this.state === 'bossWin') this.updateFakeWin(dt);
@@ -1691,11 +1711,16 @@ class Game {
   /** Torch: a ray-cast cone (walls block it, facades catch the light) plus a small glow around him. */
   computeLight() {
     const p = this.p, b = this.battery;
-    const f = b > 0 ? 0.45 + 0.55 * clamp(b / 40, 0, 1) : 0.3;
-    const range = LIGHT.RANGE * f, half = LIGHT.HALF * (0.62 + 0.38 * f);
-    let on = 1;
-    if (b <= 0) on = 0.45;
-    else if (b < 15 && Math.sin(this.time * 31) + Math.sin(this.time * 17.3) > 1.35) on = 0.3;     // low-battery flicker
+    // Battery scales cone length & brightness hard: full = long bright beam; low = short flickering stub (鮮奶 matters).
+    const f = b > 0 ? 0.26 + 0.74 * clamp(b / 100, 0, 1) : 0.16;
+    const range = LIGHT.RANGE * f, half = LIGHT.HALF * (0.58 + 0.42 * f);
+    let on = clamp(0.35 + 0.65 * clamp(b / 100, 0, 1), 0.2, 1);
+    if (b <= 0) on = 0.22;
+    else if (b < 22) {                                       // low-battery flicker — more often as battery drops
+      const thr = 1.05 + (22 - b) * 0.035;
+      if (Math.sin(this.time * 31) + Math.sin(this.time * 17.3) > thr) on *= 0.22;
+      else if (Math.sin(this.time * 53) > 0.92) on *= 0.55;
+    }
     const jit = this.alarm && this.state === 'playing' ? (Math.sin(this.time * 37) * 0.6 + Math.sin(this.time * 61) * 0.4) * 0.08 : 0;
     const ang = p.ang + jit, ox = p.x + Math.cos(ang) * 3, oy = p.y - 2;
     const poly = [];
@@ -1708,16 +1733,34 @@ class Game {
     }
     this.light = { x: ox, y: oy, ang, half, range, on, poly };
   }
+  /** Torch cone / aura only (AI + tests). Street lamps do not count as “torch in their face”. */
   inLight(x, y) {
-    const L = this.light;
-    if (!L) return false;
-    const dx = x - L.x, dy = y - L.y, d = Math.hypot(dx, dy);
-    if (d < LIGHT.AURA * 0.75) return true;
-    if (L.on < 0.9 || d > L.range) return false;
-    if (Math.abs(angDiff(Math.atan2(dy, dx), L.ang)) > L.half) return false;
-    return this.los(L.x, L.y, x, y);
+    return this.torchFactor(x, y) > 0.45;
   }
-  nearLamp(x, y) { return this.lv.lamps.some((l) => Math.hypot(l.x * TILE + 4 - x, l.y * TILE + 11 - y) < 26); }
+  /** 0–1: torch beam at this point (cone with wall occlusion + personal aura). */
+  torchFactor(x, y) {
+    const L = this.light;
+    if (!L) return 0;
+    const dx = x - L.x, dy = y - L.y, d = Math.hypot(dx, dy);
+    if (d < LIGHT.AURA * 0.85) return 1;
+    if (d > L.range || L.on < 0.18) return 0;
+    if (Math.abs(angDiff(Math.atan2(dy, dx), L.ang)) > L.half) return 0;
+    if (!this.los(L.x, L.y, x, y)) return 0;
+    const tip = clamp(1 - (d / L.range) * 0.25, 0.55, 1);
+    return clamp(L.on, 0, 1) * tip;
+  }
+  /** 0–1: how visible entities are here (torch OR street lamp). */
+  litFactor(x, y) {
+    if (this.nearLamp(x, y)) return 1;
+    return this.torchFactor(x, y);
+  }
+  nearLamp(x, y) { return this.lv.lamps.some((l) => Math.hypot(l.x * TILE + 4 - x, l.y * TILE + 11 - y) < 28); }
+  /** Smooth ~0.2s fade toward the lit factor (entities use .vis). */
+  updateVis(e, x, y, dt) {
+    const target = this.litFactor(x, y);
+    e.vis = approach(e.vis == null ? 0 : e.vis, target, dt * LIGHT.FADE);
+    return e.vis;
+  }
 
   // ── Chasers ──
   canSee(c) {
@@ -1732,7 +1775,7 @@ class Game {
     const lines = LINES[c.kind];
     c.lineIdx = (c.lineIdx + 1) % lines.length;
     this.say(c, lines[c.lineIdx]);
-    if (!c.met) { c.met = true; this.toast(c.boss ? `魔王 ${NAMES.boss} 出現了！` : `${NAMES[c.kind]} 發現你了！`, c.boss ? '#ff7a7a' : '#ffd45e'); }
+    if (!c.met) { c.met = true; this.toast(c.boss ? `魔王 ${NAMES.boss} 出現了！` : `${NAMES[c.kind]} 發現你了！`, c.boss ? '#ff7a7a' : '#ffd45e'); this.tipOnce('chaser', '被議員抓到會扣命！', '#ff9a8a'); }
     for (let i = 0; i < 8; i++) this.glints.emit({ x: c.x, y: c.y - 26, vx: rand(-45, 45), vy: rand(-60, -20), g: 140, life: 0.45, color: i % 2 ? '#ff5a5a' : '#ffffff', size: 2 });
     this.p.sweatT = 1.6;
     this.panic(!!c.boss);
@@ -1747,6 +1790,7 @@ class Game {
   }
   updateChaser(c, dt) {
     c.anim += dt; c.alertT -= dt; c.markT -= dt; c.cool = Math.max(0, c.cool - dt);
+    this.updateVis(c, c.x, c.y - 6, dt);
     if (c.bubble && (c.bubble.t -= dt) <= 0) c.bubble = null;
     if (c.mode === 'stun' || c.mode === 'argue') {
       c.modeT -= dt;
@@ -1887,6 +1931,7 @@ class Game {
     for (let k = this.rats.length - 1; k >= 0; k--) {
       const r = this.rats[k];
       r.t += dt; r.flee = Math.max(0, r.flee - dt); r.cool = Math.max(0, r.cool - dt);
+      this.updateVis(r, r.x, r.y, dt);
       const d = Math.hypot(r.x - p.x, r.y - p.y);
       if (r.mode !== 'wave' && r.flee <= 0 && d < 110 && this.inLight(r.x, r.y)) {
         r.flee = 1.3; this.countRat(r);
@@ -1900,7 +1945,8 @@ class Game {
       });
       if (r.cool <= 0 && d < 9 && !this.seq) {
         r.cool = 2.2; r.flee = 1; p.slowT = PLAYER.SLOW_TIME; this.countRat(r);
-        this.text(r.kind === 'rat' ? '噁！老鼠！' : '噁！蟑螂！', p.x, p.y - 32, '#e0b0ff', 1.1);
+        this.text('腳滑！減速中', p.x, p.y - 32, '#e0b0ff', 1.25);
+        this.tipOnce('rat', r.kind === 'rat' ? '踩到老鼠・腳滑減速！' : '踩到蟑螂・腳滑減速！', '#e0b0ff');
         for (let i = 0; i < 6; i++) this.particles.emit({ x: p.x + rand(-4, 4), y: p.y + 2, vx: rand(-30, 30), vy: rand(-30, -5), drag: 3, life: 0.4, color: '#8a6a4a' });
       }
       if (r.mode === 'wave') {
@@ -1983,7 +2029,9 @@ class Game {
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k];
       it.t += dt; it.cd = Math.max(0, it.cd - dt);
-      if (Math.random() < dt * (it.kind === 'gold' ? 2.2 : 0.7)) this.glints.emit({ x: it.x + rand(-6, 6), y: it.y - 5 + rand(-6, 3), vy: -8, life: 0.6, color: it.kind === 'gold' ? '#ffe27a' : '#ffffff', size: 1 });
+      this.updateVis(it, it.x, it.y - 4, dt);
+      // Sparkles only when the item is actually visible — no free giveaways in the dark.
+      if (it.vis > 0.35 && Math.random() < dt * (it.kind === 'gold' ? 2.2 : 0.7)) this.glints.emit({ x: it.x + rand(-6, 6), y: it.y - 5 + rand(-6, 3), vy: -8, life: 0.6, color: it.kind === 'gold' ? '#ffe27a' : '#ffffff', size: 1 });
       if (Math.hypot(it.x - p.x, it.y - p.y) > 11) continue;
       if (this.collect(it)) {
         this.items.splice(k, 1);
@@ -1994,15 +2042,32 @@ class Game {
   collect(it) {
     const say = (s, c) => this.text(s, it.x, it.y - 24, c, 1.3);
     switch (it.kind) {
-      case 'squid': if (this.inv.squid >= 9) return false; this.inv.squid++; this.score += 20; say('+小卷', '#ffb0c8'); return true;
-      case 'berry': if (this.inv.berry >= 3) return false; this.inv.berry++; this.score += 40; say('+大藍莓', '#c9b4ff'); return true;
-      case 'gold': this.stats.berries++; this.levelGold++; this.score += 500; say('特級大果藍莓！', '#ffd45e'); this.flash = 0.25; this.flashColor = '255,226,122'; return true;
-      case 'phone': if (this.inv.save > 0) return false; this.inv.save = 1; say('首長救駕 待命', '#9cc8ff'); return true;
+      case 'squid':
+        if (this.inv.squid >= 9) return false;
+        this.inv.squid++; this.score += 20; say('+小卷', '#ffb0c8');
+        this.tipOnce('squid', '空白鍵丟小卷・議員跑廁所 3 秒', '#ffb0c8');
+        return true;
+      case 'berry':
+        if (this.inv.berry >= 3) return false;
+        this.inv.berry++; this.score += 40; say('+大藍莓', '#c9b4ff');
+        this.tipOnce('berry', '附近人多時空白鍵會丟大藍莓吵架', '#c9b4ff');
+        return true;
+      case 'gold':
+        this.stats.berries++; this.levelGold++; this.score += 500; say('特級大果藍莓！', '#ffd45e');
+        this.flash = 0.25; this.flashColor = '255,226,122';
+        this.tipOnce('gold', '特級大果藍莓・高分收藏！', '#ffd45e');
+        return true;
+      case 'phone':
+        if (this.inv.save > 0) return false;
+        this.inv.save = 1; say('首長救駕 待命', '#9cc8ff');
+        this.tipOnce('phone', '首長救駕・被抓時擋一次不扣命', '#9cc8ff');
+        return true;
       case 'milk':
         if (this.milkTaken) { if (it.cd <= 0) { it.cd = 2.2; say('每週限領一瓶', '#ffffff'); } return false; }
-        if (it.fake) { say('忘記兌換…', '#cfc8e0'); this.splat(it.x, it.y, ['#d9d6e2', '#aaa4b6']); return true; }
+        if (it.fake) { say('忘記兌換…', '#cfc8e0'); this.splat(it.x, it.y, ['#d9d6e2', '#aaa4b6']); this.tipOnce('milk', '鮮奶補電力・小心有假的！', '#bfe6ff'); return true; }
         this.milkTaken = true; this.battery = 100; this.score += 30;
         say('鮮奶充電！', '#ffffff'); this.toast('每週限領一瓶', '#bfe6ff');
+        this.tipOnce('milk', '鮮奶補電力・小心有假的！', '#bfe6ff');
         this.flash = 0.3; this.flashColor = '255,255,255';
         return true;
     }
@@ -2103,12 +2168,13 @@ class Game {
     const cur = {
       x: c.x, y: c.y, tx, ty, ptx: tx, pty: ty,
       mode: 'warn', t: 0, life: CURRENT.LIFE, slowT: 0, anim: Math.random() * 4,
-      face: 1, warnDir: 0,
+      face: 1, warnDir: 0, vis: 0,
     };
     cur.warnDir = Math.atan2(p.y - cur.y, p.x - cur.x);
     this.currents.push(cur);
     this.currentWarnFlash = CURRENT.WARN;
     this.toast('洋流來了！', '#7ec8ff');
+    this.tipOnce('current', '洋流碰到會扣命・快閃！', '#7ec8ff');
     this.shake = Math.max(this.shake, 2);
     return this.currents.length - 1;
   }
@@ -2117,6 +2183,7 @@ class Game {
     for (let k = this.currents.length - 1; k >= 0; k--) {
       const c = this.currents[k];
       c.t += dt; c.anim += dt; c.slowT = Math.max(0, c.slowT - dt);
+      this.updateVis(c, c.x, c.y, dt);
       if (c.mode === 'warn') {
         c.warnDir = Math.atan2(p.y - c.y, p.x - c.x);
         if (c.t >= CURRENT.WARN) { c.mode = 'rush'; c.t = 0; }
@@ -2183,6 +2250,7 @@ class Game {
     const m = this.minion;
     if (m) {
       if (m.bubble && (m.bubble.t -= dt) <= 0) m.bubble = null;
+      this.updateVis(m, m.x, m.y - 6 - (m.z || 0), dt);
       if (m.leaving) { m.lt += dt; m.x -= m.face * 110 * dt; m.z = Math.abs(Math.sin(m.lt * 12)) * 3; if (m.lt > 1.1) this.minion = null; }
     }
     this.alarmLevel = approach(this.alarmLevel, this.alarm && this.state === 'playing' && !this.seq ? 1 : 0, dt * 3);
@@ -2225,9 +2293,9 @@ class Game {
   bossTuning() {
     const n = this.boss.stage;
     return {
-      speed: Math.min(BOSS.MAX_SPEEDUP, 1 + 0.08 * (n - 1)),
-      every: Math.max(1.05, [1.9, 1.9, 1.55, 1.4, 1.3][n] || 1.4 - 0.05 * (n - 3)),
-      move: Math.min(1.6, 0.8 + 0.15 * (n - 1)),
+      speed: Math.min(BOSS.MAX_SPEEDUP, 1 + 0.055 * (n - 1)),
+      every: Math.max(1.25, [2.15, 2.15, 1.85, 1.65, 1.5][n] || 1.55 - 0.04 * (n - 3)),
+      move: Math.min(1.35, 0.7 + 0.1 * (n - 1)),
     };
   }
   clearBEnemyShots() {
@@ -2620,6 +2688,7 @@ class Game {
     if (this.state === 'bossWin') this.drawFakeWin(ctx);
     if (this.state === 'coldwater') this.drawColdWater(ctx);
     if (this.state === 'title') this.drawTitle(ctx);
+    else if (this.state === 'help') this.drawHelp(ctx);
     if (this.state === 'over') { this.drawHud(ctx); this.drawCard(ctx); }
     if (this.state === 'winFinal') this.drawWinFinal(ctx);
     if (this.paused && this.state === 'playing') this.drawPause(ctx);
@@ -2694,19 +2763,57 @@ class Game {
   drawChaser(ctx, c, ox, oy) {
     const x = c.x - ox, y = c.y - oy + FEET;
     if (x < -30 || y < -10 || x > VIEW_W + 30 || y > VIEW_H + 40) { c.spr = null; return; }
-    this.shadow(ctx, x, y - 1);
     const s = this.chaserSprite(c);
     const hop = c.mode === 'chase' ? Math.round(Math.abs(Math.sin(c.anim * 12))) : 0;
     c.spr = s; c.sx = snap(x - s.w / 2); c.sy = snap(y - s.h - hop);
-    ctx.drawImage(s.canvas, c.sx, c.sy);
+    const vis = c.vis || 0;
+    const near = Math.hypot(c.x - this.p.x, c.y - this.p.y) < LIGHT.SIL_DIST;
+    // Fully/partly revealed: normal sprite. Outside the beam but nearby: faint dark silhouette only.
+    if (vis > 0.02) {
+      this.shadow(ctx, x, y - 1);
+      ctx.globalAlpha = clamp(vis, 0, 1);
+      ctx.drawImage(s.canvas, c.sx, c.sy);
+      ctx.globalAlpha = 1;
+    }
+    if (vis < 0.85 && near) {
+      const sil = LIGHT.SIL_A * (1 - vis);
+      if (sil > 0.02) {
+        ctx.save();
+        ctx.globalAlpha = sil;
+        ctx.filter = 'brightness(0)';
+        ctx.drawImage(s.canvas, c.sx, c.sy);
+        ctx.filter = 'none';
+        ctx.restore();
+      }
+    }
   }
   drawCurrent(ctx, c, ox, oy) {
     const x = c.x - ox, y = c.y - oy;
     if (x < -40 || y < -40 || x > VIEW_W + 40 || y > VIEW_H + 40) return;
+    const vis = c.vis || 0;
+    const near = Math.hypot(c.x - this.p.x, c.y - this.p.y) < LIGHT.SIL_DIST * 1.2;
+    // Warn-mode: always keep a small red direction cue (fair alarm); body still gated by light.
+    if (c.mode === 'warn') {
+      const ang = c.warnDir;
+      ctx.save(); ctx.globalAlpha = 0.55 + 0.35 * Math.sin(c.t * 12); ctx.translate(x, y); ctx.rotate(ang);
+      ctx.fillStyle = '#ff5a5a';
+      ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(6, -5); ctx.lineTo(6, 5); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    if (vis < 0.04 && !(near && vis < 0.5)) {
+      // Nearby but dark: faint silhouette blob so it isn't a total surprise.
+      if (near) {
+        ctx.save();
+        ctx.globalAlpha = LIGHT.SIL_A * 0.9;
+        ctx.fillStyle = '#0a1524';
+        ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      return;
+    }
     const wv = (MX.miniWave || SPR.wave)[Math.floor(c.anim / 0.12) % (MX.miniWave || SPR.wave).length];
-    const a = c.mode === 'warn' ? 0.35 + 0.35 * Math.sin(c.t * 12) : (c.slowT > 0 ? 0.7 : 1);
+    const a = (c.mode === 'warn' ? 0.35 + 0.35 * Math.sin(c.t * 12) : (c.slowT > 0 ? 0.7 : 1)) * clamp(vis, 0.08, 1);
     ctx.globalAlpha = a;
-    // big 洋流 blob
     const sc = c.mode === 'warn' ? 1.2 : 1.6;
     ctx.drawImage(wv.canvas, snap(x - wv.w * sc / 2), snap(y - wv.h * sc / 2), wv.w * sc, wv.h * sc);
     if (SPR.wave) {
@@ -2714,36 +2821,37 @@ class Game {
       ctx.drawImage(w2.canvas, snap(x - w2.w), snap(y - w2.h / 2), w2.w * 2, w2.h * 1.4);
     }
     ctx.globalAlpha = 1;
-    if (c.mode === 'warn') {
-      drawZh(ctx, '洋流', x, y - 18, { align: 'center', size: 10, weight: 'bold', color: '#7ec8ff', outline: PAL.ink });
-      // direction arrow toward player
-      const ang = c.warnDir;
-      ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
-      ctx.fillStyle = '#ff5a5a';
-      ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(6, -5); ctx.lineTo(6, 5); ctx.closePath(); ctx.fill();
-      ctx.restore();
-    } else {
-      drawZh(ctx, '洋流', x, y - 16, { align: 'center', size: 10, weight: '900', color: '#ff8a7a', outline: PAL.ink });
+    if (vis > 0.4) {
+      if (c.mode === 'warn') drawZh(ctx, '洋流', x, y - 18, { align: 'center', size: 10, weight: 'bold', color: '#7ec8ff', outline: PAL.ink, alpha: vis });
+      else drawZh(ctx, '洋流', x, y - 16, { align: 'center', size: 10, weight: '900', color: '#ff8a7a', outline: PAL.ink, alpha: vis });
     }
   }
   drawRat(ctx, r, ox, oy) {
+    const vis = r.vis || 0;
+    if (vis < 0.04) return;
     const x = r.x - ox, y = r.y - oy + 3;
     if (x < -10 || y < -10 || x > VIEW_W + 10 || y > VIEW_H + 10) return;
     const fr = (r.kind === 'rat' ? MX.rat : MX.roach)[Math.floor(r.t * (r.flee > 0 || r.mode === 'wave' ? 18 : 8)) % 2];
+    ctx.globalAlpha = clamp(vis, 0, 1);
     this.put(ctx, r.face > 0 ? fr.r : fr.l, x + Math.round(Math.sin(r.t * 9 + r.tx) * 1), y);
+    ctx.globalAlpha = 1;
   }
   drawItem(ctx, it, ox, oy) {
+    const vis = it.vis || 0;
+    if (vis < 0.04) return;                                       // items are invisible outside the beam (no silhouette)
     const x = it.x - ox, y = it.y - oy + 4;
     if (x < -16 || y < -16 || x > VIEW_W + 16 || y > VIEW_H + 24) return;
     const bob = Math.round(Math.sin(it.t * 3) * 1.5);
+    ctx.globalAlpha = clamp(vis, 0, 1);
     this.shadow(ctx, x, y - 1, 10);
     let s = { squid: MX.squid, berry: MX.bigBerry, gold: MX.goldBerry, phone: MX.phone, milk: MX.milk }[it.kind];
     if (it.kind === 'milk' && this.milkTaken) s = MX.milkGrey;
-    if (it.kind === 'gold') {                                      // a slow golden halo for the collectible
-      ctx.fillStyle = `rgba(255,226,122,${0.25 + 0.15 * Math.sin(it.t * 4)})`;
+    if (it.kind === 'gold') {
+      ctx.fillStyle = `rgba(255,226,122,${(0.25 + 0.15 * Math.sin(it.t * 4)) * vis})`;
       ctx.fillRect(snap(x - 7), snap(y - 15 + bob), 14, 12); ctx.fillRect(snap(x - 5), snap(y - 17 + bob), 10, 16);
     }
     this.put(ctx, s, x, y - 1 + bob);
+    ctx.globalAlpha = 1;
   }
   drawShot(ctx, s, ox, oy) {
     const x = s.x - ox, y = s.y - oy + 3;
@@ -2753,9 +2861,13 @@ class Game {
   }
   drawMinion(ctx, ox, oy) {
     const m = this.minion, x = m.x - ox, y = m.y - oy + FEET;
+    const vis = m.vis == null ? 1 : m.vis;
+    if (vis < 0.04) return;
+    ctx.globalAlpha = clamp(vis, 0, 1);
     this.shadow(ctx, x, y - 1);
     const set = MX.chief[m.landed && !m.leaving ? 1 : 0];
     this.put(ctx, m.face > 0 ? set.r : set.l, x, y - m.z);
+    ctx.globalAlpha = 1;
   }
   drawExit(ctx, ox, oy) {
     const e = this.exit, r = e.run;
@@ -2833,15 +2945,15 @@ class Game {
     }
   }
 
-  /** Everything that must read clearly regardless of light: rims, marks, bubbles, floating text. */
+  /** Marks / alarms stay fair; speech bubbles and detail rims only when the chaser is (partly) seen. */
   drawOverlays(ctx, ox, oy) {
     const playing = this.state === 'playing';
     for (const c of this.chasers) {
-      if (!c.spr) continue;
-      const lit = this.inLight(c.x, c.y - 6) || this.nearLamp(c.x, c.y);
-      if (lit && !c.boss) continue;
-      const col = c.boss ? '#ff5a5a' : c.mode === 'chase' ? '#ff9a8a' : '#d4dcff';
-      ctx.globalAlpha = lit ? 0.75 : 0.9;
+      if (!c.spr || (c.vis || 0) < 0.35) continue;
+      // Soft rim only while revealed (boss / chase stand out); no free outline in the dark.
+      const col = c.boss ? '#ff5a5a' : c.mode === 'chase' ? '#ff9a8a' : null;
+      if (!col) continue;
+      ctx.globalAlpha = 0.55 * clamp(c.vis, 0, 1);
       const R = MX.rim(c.spr, col);
       ctx.drawImage(R.canvas, c.sx - 1, c.sy - 1);
       ctx.globalAlpha = 1;
@@ -2849,22 +2961,30 @@ class Game {
     this.glints.draw(ctx, ox, oy);
     for (const c of this.chasers) {
       if (!c.spr) continue;
-      const hx = c.x - ox, top = c.sy;
-      if (c.mode === 'stun') {
+      const hx = c.x - ox, top = c.sy, vis = c.vis || 0;
+      if (c.mode === 'stun' && vis > 0.3) {
         for (let i = 0; i < 3; i++) {
           const a = this.time * 5 + i * 2.1, sx = snap(hx + Math.cos(a) * 8), sy = snap(top + 2 + Math.sin(a) * 2.5);
           ctx.fillStyle = i === 1 ? '#8fe07a' : PAL.star; ctx.fillRect(sx - 1, sy, 3, 1); ctx.fillRect(sx, sy - 1, 1, 3);
         }
       }
+      // Alert '!' is a fair alarm — always show while chasing even if the body is in shadow.
       if (playing && c.alertT > 0) {
         const k = clamp((0.9 - c.alertT) / 0.15, 0, 1), sc = k < 1 ? 1 + (1 - k) : 1;
         drawZh(ctx, '！', hx + 9, Math.max(HUD_H + 2, top - 6 - Math.round(Math.sin(this.time * 20) * 1)), { size: 14, weight: '900', color: '#ff4a4a', outline: '#ffffff', scale: sc, align: 'center' });
-      } else if (c.markT > 0) drawZh(ctx, c.mark, hx + 9, Math.max(HUD_H + 2, top - 6), { size: 12, weight: 'bold', color: '#d4dcff', outline: PAL.ink, align: 'center', alpha: clamp(c.markT * 3, 0, 1) });
+      } else if (c.markT > 0 && vis > 0.35) drawZh(ctx, c.mark, hx + 9, Math.max(HUD_H + 2, top - 6), { size: 12, weight: 'bold', color: '#d4dcff', outline: PAL.ink, align: 'center', alpha: clamp(c.markT * 3, 0, 1) * vis });
     }
     const p = this.p, placed = [];
     if (p.bubble) this.drawBubble(ctx, p.bubble, p.x - ox, p.y - oy + FEET - 26, placed);
-    if (this.minion && this.minion.bubble) this.drawBubble(ctx, this.minion.bubble, this.minion.x - ox, this.minion.y - oy + FEET - 26 - this.minion.z, placed);
-    for (const c of this.chasers) if (c.spr && c.bubble) this.drawBubble(ctx, c.bubble, c.x - ox, c.sy - 1, placed);
+    if (this.minion && this.minion.bubble && (this.minion.vis == null || this.minion.vis > 0.35)) this.drawBubble(ctx, this.minion.bubble, this.minion.x - ox, this.minion.y - oy + FEET - 26 - this.minion.z, placed);
+    for (const c of this.chasers) {
+      if (!c.spr || !c.bubble) continue;
+      const vis = c.vis || 0;
+      if (vis < 0.35) continue;                                   // unseen → no speech bubble
+      const prev = c.bubble;
+      // Partly seen: dim the bubble with visibility.
+      this.drawBubble(ctx, prev, c.x - ox, c.sy - 1, placed, vis);
+    }
     this.bubbleRects = placed;   // exposed for the headless overlap check
     if (playing && p.sweatT > 0 && !this.seq) {
       const k = (this.time * 2) % 1;
@@ -2883,7 +3003,7 @@ class Game {
       else drawZh(ctx, t.str, x, y, { size: 11, weight: 'bold', align: 'center', color: t.color, outline: PAL.ink, alpha: a });
     }
   }
-  drawBubble(ctx, b, cx, bottom, placed) {
+  drawBubble(ctx, b, cx, bottom, placed, visMul = 1) {
     const s = MX.bubble(b.text, b.color), top0 = HUD_H + 2;
     const x = clamp(Math.round(cx - s.w / 2), 2, VIEW_W - s.w - 2);
     let y = Math.max(top0, Math.round(bottom - s.h));
@@ -2892,7 +3012,7 @@ class Game {
       for (let i = 0, r; i < 4 && (r = hit(y)); i++) y = r.y - s.h - 1 >= top0 ? r.y - s.h - 1 : r.y + r.h + 1;
       placed.push({ x, y, w: s.w, h: s.h, text: b.text });
     }
-    ctx.globalAlpha = clamp(b.t * 6, 0, 1);
+    ctx.globalAlpha = clamp(b.t * 6, 0, 1) * clamp(visMul, 0, 1);
     blit(ctx, s, x, y);
     ctx.globalAlpha = 1;
   }
@@ -2997,13 +3117,12 @@ class Game {
       ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 0.5, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
       if (b.id === 'pause') { ctx.fillStyle = '#ffffff'; ctx.fillRect(b.x - 3, b.y - 3, 2, 6); ctx.fillRect(b.x + 1, b.y - 3, 2, 6); continue; }
-      if (b.id === 'chop') {
-        drawZh(ctx, '砍', b.x, b.y - 6, { align: 'center', size: 12, weight: '900', color: this.input.chopTouch ? '#ffd45e' : '#a8e89a', outline: PAL.ink });
+      if (b.id === 'act' || b.id === 'chop') {
+        const hold = this.input.chopTouch || this.chopping;
+        const lab = b.label || (this.faceTree() ? '砍' : '丟');
+        drawZh(ctx, lab, b.x, b.y - 6, { align: 'center', size: 13, weight: '900', color: hold ? '#ffd45e' : (lab === '砍' ? '#a8e89a' : '#ffffff'), outline: PAL.ink });
         continue;
       }
-      const s = b.id === 'squid' ? MX.squid : MX.bigBerry, n = this.inv[b.id];
-      ctx.globalAlpha = n ? 1 : 0.4; ctx.drawImage(s.canvas, Math.round(b.x - s.w / 2), Math.round(b.y - s.h / 2)); ctx.globalAlpha = 1;
-      drawText(ctx, String(n), b.x + b.r - 6, b.y + b.r - 8, { color: '#ffffff', outline: PAL.ink });
     }
   }
   drawChopUI(ctx) {
@@ -3266,6 +3385,51 @@ class Game {
     this.cardFx.draw(ctx);
   }
 
+  /** Second page after title: illustrated how-to, readable on mobile + desktop. */
+  drawHelp(ctx) {
+    ctx.fillStyle = 'rgba(12,14,36,0.55)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    drawZh(ctx, '玩法說明', VIEW_W / 2, 4, { size: 14, weight: '900', align: 'center', color: '#ffd45e', outline: PAL.ink, shadow: 'rgba(0,0,0,0.45)' });
+    this.panel(ctx, 6, 22, VIEW_W - 12, 170);
+    // Compact 2-col rows: sprite + one-line effect
+    const rows = [
+      [MX.milk, '鮮奶', '補手電筒電力（有假的）', '#bfe6ff'],
+      [MX.squid, '小卷', '丟出・議員跑廁所停 3 秒', '#ffb0c8'],
+      [MX.bigBerry, '大藍莓', '一群人停下來吵藍莓 5 秒', '#c9b4ff'],
+      [MX.phone, '首長救駕', '被抓時替你答詢一次不扣命', '#9cc8ff'],
+      [MX.chars.jian.walk[1].r, '議員', '被抓到會扣一命', '#ff9a8a'],
+      [null, '洋流', '碰到扣命・紅邊警告快閃', '#7ec8ff'],
+      [null, '樹', '按住空白鍵砍掉・開新路', '#a8e89a'],
+      [null, '連任門', '關卡目標（但會跑掉）', '#ffd45e'],
+      [MX.rat[0].r, '老鼠／蟑螂', '踩到腳滑減速！', '#e0b0ff'],
+    ];
+    const colW = 188, x0 = 14, y0 = 28;
+    rows.forEach((row, i) => {
+      const col = i < 5 ? 0 : 1, ri = i < 5 ? i : i - 5;
+      const x = x0 + col * colW, y = y0 + ri * 28;
+      const [spr, name, desc, colr] = row;
+      // icon slot
+      ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, 22, 22);
+      if (spr) {
+        const sc = Math.min(1, 18 / Math.max(spr.w, spr.h));
+        ctx.drawImage(spr.canvas, Math.round(x + 11 - (spr.w * sc) / 2), Math.round(y + 11 - (spr.h * sc) / 2), Math.round(spr.w * sc), Math.round(spr.h * sc));
+      } else if (name === '洋流') {
+        ctx.fillStyle = '#4aa3f0'; ctx.beginPath(); ctx.arc(x + 11, y + 11, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#bfe8ff'; ctx.beginPath(); ctx.arc(x + 8, y + 9, 3, 0, Math.PI * 2); ctx.fill();
+      } else if (name === '樹') {
+        ctx.fillStyle = '#2a6b3a'; ctx.fillRect(x + 9, y + 14, 4, 6);
+        ctx.fillStyle = '#52a95c'; ctx.beginPath(); ctx.arc(x + 11, y + 10, 7, 0, Math.PI * 2); ctx.fill();
+      } else if (name === '連任門') {
+        this.drawMiniDoor(ctx, x + 5, y + 2);
+      }
+      drawZh(ctx, name, x + 26, y + 1, { size: 11, weight: '900', color: colr });
+      drawZh(ctx, desc, x + 26, y + 13, { size: 10, weight: 'bold', color: '#e8e4f6' });
+    });
+    // controls
+    drawZh(ctx, '操作：方向鍵／WASD 移動・空白鍵丟道具／按住砍樹', VIEW_W / 2, 194, { size: 10, weight: 'bold', align: 'center', color: '#ffffff', outline: PAL.ink });
+    drawZh(ctx, '手機：左拖曳・右下按鈕點＝丟、按住＝砍', VIEW_W / 2, 205, { size: 10, align: 'center', color: '#d8d4ec', outline: PAL.ink });
+    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, 212, '#ffffff', 1, this.time % 1.1 < 0.18, true);
+  }
+
   drawTitle(ctx) {
     ctx.fillStyle = 'rgba(14,16,40,0.34)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     const bob = Math.round(Math.sin(this.time * 2.2) * 1.2);
@@ -3298,9 +3462,9 @@ class Game {
       drawZh(ctx, desc, cx + 10, cy + 11, { size: 10, color: '#c8c4dc' });
     });
     this.panel(ctx, 8, 174, 384, 28);
-    drawZh(ctx, '方向鍵移動・空白鍵丟小卷／按住砍樹・J 小卷・K 大藍莓・P 暫停', VIEW_W / 2, 177, { size: 10, weight: 'bold', align: 'center', color: '#ffffff' });
-    drawZh(ctx, '手機：左側拖曳移動・右下按鈕丟道具・點一下開始', VIEW_W / 2, 189, { size: 10, align: 'center', color: '#c8c4dc' });
-    drawPrompt(ctx, '按', '空白鍵', '開始', VIEW_W / 2, 208, '#ffffff', 1, this.time % 1.1 < 0.18, true);
+    drawZh(ctx, '手電筒照到才看得見人・找到「連任」大門！', VIEW_W / 2, 177, { size: 11, weight: 'bold', align: 'center', color: '#ffffff' });
+    drawZh(ctx, '下一頁有完整玩法說明', VIEW_W / 2, 191, { size: 10, align: 'center', color: '#c8c4dc' });
+    drawPrompt(ctx, '按', '空白鍵', '看玩法', VIEW_W / 2, 208, '#ffffff', 1, this.time % 1.1 < 0.18, true);
     if (this.hi > 0) drawText(ctx, 'HI ' + String(this.hi).padStart(6, '0'), VIEW_W - 6, 5, { align: 'right', color: '#ffe9a8', outline: PAL.ink });
   }
 
@@ -3422,6 +3586,8 @@ window.wananMaze = {
   give(kind, n) { game.inv[kind] = n; },
   setBattery(v) { game.battery = v; },
   cutTrees(n) { return game.startCut(n); },
+  litAt(x, y) { return game.litFactor(x, y); },
+  entityVis() { return { chasers: game.chasers.map((c) => ({ kind: c.kind, vis: +(c.vis || 0).toFixed(3), lit: game.litFactor(c.x, c.y - 6) })), items: game.items.map((it) => ({ kind: it.kind, vis: +(it.vis || 0).toFixed(3) })), rats: game.rats.slice(0, 6).map((r) => ({ vis: +(r.vis || 0).toFixed(3) })), currents: game.currents.map((c) => ({ mode: c.mode, vis: +(c.vis || 0).toFixed(3) })) }; },
   spawnCurrent(tx, ty) {
     if (tx != null) return game.spawnCurrent(ty * game.lv.w + tx);
     return game.spawnCurrent();
