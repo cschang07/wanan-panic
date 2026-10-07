@@ -1237,11 +1237,40 @@ function bfs(lv, sources) {
   return dist;
 }
 
+/** Min BFS path length (tiles) between start / player and the 連任 door. */
+const EXIT_MIN_DIST = 30;
+
+/**
+ * Among walkable tiles in `dist`, pick the farthest that is still ≥ minDist.
+ * Falls back to absolute farthest if nothing qualifies.
+ */
+function pickExitIndex(dist, minDist) {
+  let best = -1, bi = 0, far = -1, fi = -1;
+  for (let i = 0; i < dist.length; i++) {
+    const d = dist[i];
+    if (d < 0) continue;
+    if (d > best) { best = d; bi = i; }
+    if (d >= minDist && d > far) { far = d; fi = i; }
+  }
+  return fi >= 0 ? { i: fi, d: far } : { i: bi, d: best };
+}
+
 /**
  * Taipei-alley maze: a recursive-backtracker maze, braided (most dead ends knocked through so there
  * are loops to escape along), a few little plazas, and street trees standing in some of the gaps.
+ * Regenerates until start→exit BFS distance is at least EXIT_MIN_DIST (or best effort).
  */
 function genLevel(n, seed) {
+  let bestLv = null;
+  for (let attempt = 0; attempt < 28; attempt++) {
+    const lv = genLevelAttempt(n, (seed + attempt * 7919) >>> 0);
+    if (!bestLv || lv.exitDist > bestLv.exitDist) bestLv = lv;
+    if (lv.exitDist >= EXIT_MIN_DIST) return lv;
+  }
+  return bestLv;
+}
+
+function genLevelAttempt(n, seed) {
   const rng = mulberry32(seed), ri = (a, b) => a + Math.floor(rng() * (b - a + 1));
   const cw = Math.min(13 + 2 * (n - 1), 29), ch = Math.min(9 + (n - 1), 19);
   const w = cw * 2 + 1, h = ch * 2 + 1;
@@ -1285,14 +1314,22 @@ function genLevel(n, seed) {
   cand.slice(0, Math.max(12, Math.round(cand.length * 0.24))).forEach((i) => { t[i] = T_TREE; });
 
   const lv = { n, w, h, t, seed, ...levelInfo(n) };
-  // start in a corner; the 連任 door goes to the farthest reachable tile
+  // start on a walkable corner (or first floor tile); 連任 door ≥ EXIT_MIN_DIST away by BFS
   const corners = [[1, 1], [w - 2, 1], [1, h - 2], [w - 2, h - 2]];
-  const [stx, sty] = corners[ri(0, 3)];
+  let stx, sty;
+  const shuffledCorners = shuffle(corners.slice(), rng);
+  const cornerHit = shuffledCorners.find(([x, y]) => !solidT(t[I(x, y)]));
+  if (cornerHit) { stx = cornerHit[0]; sty = cornerHit[1]; }
+  else {
+    let found = false;
+    for (let i = 0; i < w * h; i++) if (!solidT(t[i])) { stx = i % w; sty = (i / w) | 0; found = true; break; }
+    if (!found) { stx = 1; sty = 1; }
+  }
   lv.start = { x: stx, y: sty };
   lv.distStart = bfs(lv, [I(stx, sty)]);
-  let best = -1, bi = 0;
-  lv.distStart.forEach((d, i) => { if (d > best) { best = d; bi = i; } });
-  lv.exit = { x: bi % w, y: (bi / w) | 0 };
+  const picked = pickExitIndex(lv.distStart, EXIT_MIN_DIST);
+  lv.exit = { x: picked.i % w, y: (picked.i / w) | 0 };
+  lv.exitDist = picked.d;
   // floors, dead ends, junction lamps
   lv.floors = []; lv.deadEnds = [];
   const deg = (i) => { const x = i % w, y = (i / w) | 0; return DIRS4.filter(([dx, dy]) => !solidT(t[I(x + dx, y + dy)])).length; };
@@ -1648,6 +1685,8 @@ class Game {
     this.p.fx = open[0]; this.p.fy = open[1]; this.p.ang = Math.atan2(open[1], open[0]); if (open[0]) this.p.face = open[0];
     const e = this.tileCenter(lv.exit.x, lv.exit.y);
     this.exit = { x: e.x, y: e.y, run: null };
+    // belt-and-suspenders: if somehow still too close, shove 連任 farther from the player
+    this.ensureExitFar(EXIT_MIN_DIST);
     this.shots = []; this.rings = []; this.cuts = []; this.texts = []; this.minion = null;
     this.currents = []; this.currentT = rand(...CURRENT.INTERVAL) * (0.55 + 0.1 * Math.random());
     this.currentWarnFlash = 0; this.treeHp = {}; this.chopping = false; this.chopTarget = null;
@@ -2097,6 +2136,44 @@ class Game {
       }
       else if (!s.out && s.t >= 0.5) this.seq = null;
     }
+  }
+  /**
+   * Re-pick 連任 on the current map so BFS distance from (fx,fy) [default: player] is ≥ minDist.
+   * Used after gen and for any mid-level relocate so the door never lands next to him.
+   */
+  relocateExitFar(minDist = EXIT_MIN_DIST, fx = this.p.x, fy = this.p.y) {
+    const lv = this.lv, w = lv.w;
+    const from = this.tileIdx(fx, fy);
+    const dist = bfs(lv, [from]);
+    const cur = this.tileIdx(this.exit.x, this.exit.y);
+    const picked = pickExitIndex(dist, minDist);
+    if (picked.i === cur && picked.d >= minDist) return false;
+    // Prefer a tile that isn't the current exit when relocating mid-level
+    if (picked.i === cur) {
+      let best = -1, bi = -1;
+      for (let i = 0; i < dist.length; i++) {
+        const d = dist[i];
+        if (d >= minDist && i !== cur && d > best) { best = d; bi = i; }
+      }
+      if (bi < 0) {
+        for (let i = 0; i < dist.length; i++) {
+          const d = dist[i];
+          if (d > best && i !== cur) { best = d; bi = i; }
+        }
+      }
+      if (bi >= 0) { picked.i = bi; picked.d = best; }
+    }
+    const c = this.tileCenter(picked.i % w, (picked.i / w) | 0);
+    this.exit = { x: c.x, y: c.y, run: null };
+    lv.exit = { x: picked.i % w, y: (picked.i / w) | 0 };
+    lv.exitDist = picked.d;
+    lv.distStart = bfs(lv, [lv.start.y * w + lv.start.x]);
+    return true;
+  }
+  ensureExitFar(minDist = EXIT_MIN_DIST) {
+    const lv = this.lv;
+    const d = lv.distStart[lv.exit.y * lv.w + lv.exit.x];
+    if (d >= 0 && d < minDist) this.relocateExitFar(minDist, this.p.x, this.p.y);
   }
   checkExit() {
     const e = this.exit;
@@ -3875,7 +3952,7 @@ requestAnimationFrame(frame);
 // Debug / test hooks.
 const tc = (tx, ty) => ({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 });
 window.wananMaze = {
-  game, MX, SPR, TILE, SURVIVE, BOSS_HP, ENDERS, ENDER_NAMES, get VIEW_W() { return VIEW_W; }, get VIEW_H() { return VIEW_H; }, get BASE_VIEW_W() { return BASE_VIEW_W; }, get BASE_VIEW_H() { return BASE_VIEW_H; }, tryEnterFullscreen, isMobileLayout, resize, wantTouchPrompt,
+  game, MX, SPR, TILE, SURVIVE, BOSS_HP, ENDERS, ENDER_NAMES, EXIT_MIN_DIST, get VIEW_W() { return VIEW_W; }, get VIEW_H() { return VIEW_H; }, get BASE_VIEW_W() { return BASE_VIEW_W; }, get BASE_VIEW_H() { return BASE_VIEW_H; }, tryEnterFullscreen, isMobileLayout, resize, wantTouchPrompt,
   teleport(tx, ty) { const c = tc(tx, ty); game.p.x = c.x; game.p.y = c.y; game.updateFields(); game.updateCamera(0, true); game.computeLight(); },
   face(dx, dy) { const p = game.p; p.fx = dx; p.fy = dy; p.ang = Math.atan2(dy, dx); if (dx) p.face = dx > 0 ? 1 : -1; game.computeLight(); },
   tileOf(x, y) { return [Math.floor(x / TILE), Math.floor(y / TILE)]; },
