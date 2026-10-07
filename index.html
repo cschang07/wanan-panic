@@ -174,7 +174,6 @@ const LEVELS = [
   { place: '北投坡道', theme: 'alley' }, { place: '南港舊廠區', theme: 'alley' },
 ];
 const levelInfo = (n) => LEVELS[(n - 1) % LEVELS.length];
-const TREES = { REMOVED: 3164, REPLANTED: 778 };   // the reported ratio drives the 補植 counter
 
 const PAL = { ink: '#2a2433', star: '#ffd84a', gold: '#f2a93b', cream: '#fff7e6' };
 
@@ -2235,7 +2234,7 @@ class Game {
     this.stats.trees++; this.dirtyFields = true; this.updateFields();
     for (let i = 0; i < 16; i++) this.particles.emit({ x: cx + rand(-8, 8), y: cy + rand(-8, 6), vx: rand(-40, 40), vy: rand(-40, 0), drag: 3, life: 0.55, color: pick(['#e6e0f0', '#2fb5ad', '#ffffff', '#c8935a']) });
     this.text('744萬遮陽傘', cx, cy - 16, '#ffd45e', 1.8);
-    this.toast(`移除 ${this.stats.trees} 棵、補植 ${Math.floor((this.stats.trees * TREES.REPLANTED) / TREES.REMOVED)} 棵`, '#a8e89a');
+    this.toast(`亂砍樹 ${this.stats.trees} 棵`, '#a8e89a');
     this.chopping = false; this.chopTarget = null; this.input.chopTouch = false;
     this.shake = 3; this.flash = 0.2; this.flashColor = '180,220,160';
   }
@@ -3613,12 +3612,12 @@ class Game {
     drawZh(ctx, '市政成績單', cx, y + 5, { size: 13, weight: '900', align: 'center', color: '#fff3d6', outline: '#7a1e26' });
     drawZh(ctx, '臺北市', x + 9, y + 6, { size: 10, weight: 'bold', color: '#ffd9c4' });
     drawZh(ctx, `市長 ${NAMES.player}`, x + W - 9, y + 6, { size: 10, weight: 'bold', color: '#ffd9c4', align: 'right' });
-    const s = this.stats, repl = Math.floor((s.trees * TREES.REPLANTED) / TREES.REMOVED);
+    const s = this.stats;
     const rows = [
       ['連任大門溜走', s.reloc, '次', '差一點點'],
       ['被質詢問倒', s.caught, '次', '載入中…'],
       ['小卷投擲', s.thrown, '個', '沒有集體中毒'],
-      ['砍樹', s.trees, '棵', `補植 ${repl} 棵`],
+      ['亂砍樹', s.trees, '棵', '只剩遮陽傘'],
       ['遇到鼠蟑', s.rats, '隻', '南鼠北送'],
       ['首長救駕', s.saves, '次', '局長代答'],
     ];
