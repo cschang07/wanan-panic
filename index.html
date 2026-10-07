@@ -809,20 +809,81 @@ const SPR = (() => {
 // ─────────────────────────── 4b. MAZE SPRITES ───────────────────────────
 const MX = (() => {
   const P = SPR.parts;
-  // 許淑華: shoulder-length hair (override politics chin-bob with longer locks)
+  // ── Hair caricatures (exaggerated public trademarks; 16×12, eyes at rows 7–8) ──
+  // 蔣萬安: thick neat 油頭 + clear left side-part
+  P.PLAYER_HEAD = [
+    '   H HhHHHHHH',
+    '  HHHhHHHHHHHH',
+    ' HHHHhHHHHHHHHH',
+    'HHHHHhHHHHHHHHH',
+    'HHHHHhHHHHHHHHHH',
+    'HHHHHhHHSSSSSSHH',
+    'HHHHHSSSSSSSSSSS',
+    'HHHsSSSSSKSSSKSS',
+    'HHHsSSSSSKSSSKSS',
+    ' HHSSSSSRSSSSSRS',
+    '  HSSSSSSSSMMSSS',
+    '   SSSSSSSSSSSS',
+  ];
+  // 沈伯洋: voluminous curly/puffy hair + rectangular glasses (public trademark caricature)
+  P.PUMA_HEAD = [
+    '  H HHHHHHH H',
+    ' HHHHHHhHHHHHH',
+    'HHHHHHhHhHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHSSSSSSSSSHH',
+    'HHHHSSSSSSSSSSSS',
+    'HHHSSSGGGGGGGGGS',
+    'HHHsSSGLKGGGLKGS',
+    'HHHsSSGLLGSGLLGS',
+    ' HHSSSSSRSSSSSRS',
+    '  HSSSSSSSSMMSSS',
+    '   SSSSSSSSSSSS',
+  ];
+  // 簡舒培: long straight + heavy blunt bangs (locks hang via LONG extras)
+  P.JIAN_HEAD = [
+    '   HHHHHHHHHH',
+    '  HHHHHHHHHHHH',
+    ' HHHHHHHHHHHHHH',
+    'HHHHHHhhhHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHSSSSSSSSSSHH',
+    'HHHHSSSSKSSSKSSH',
+    'HHHHSSSSKSSSKSSH',
+    'HHHHSSSSRSSSSRHH',
+    'HHHHSSSSSMMSSSHH',
+    'HHHHHSSSSSSSSHHH',
+  ];
+  // 何孟樺: fluffy layered shoulder crop + cowlick tuft
+  P.HE_HEAD = [
+    '  H  HHHHHHH H',
+    ' HHHHHHhHHHHHHH',
+    'HHHHHHhHhHhHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHHHHHHHHHHH',
+    'HHHHHHSSHHSSHHSH',
+    'HHHHSSSSSSSSSSSS',
+    'HHHsSSSSKSSSKSSS',
+    'HHHsSSSSKSSSKSSS',
+    ' HHSSSSSRSSSSRSS',
+    '  HSSSSSSSMMMSSS',
+    '   HSSSSSSSSSSH',
+  ];
+  // 許淑華: shoulder-length soft waves + side-swept bangs
   P.XU_HEAD = [
     '    HHHHHHHH',
-    '  HHHHHHHHHHHH',
-    ' HHHHHHhhhHHHHH',
+    '  HHHhHHHHHHHH',
+    ' HHHhhHHHHHHHHH',
     'HHHHHHHHHHHHHHHH',
     'HHHHHHHHHHHHHHHH',
     'HHHHHHHSSSSSSHHH',
     'HHHHSSSSSSSSSSSS',
     'HHHSSSSKSSSKSSSS',
     'HHHsSSSKSSSKSSSS',
-    'HHHsSSSSSSSSSSSS',
-    'HHHHSSSSRSSSSRSS',
-    'HHHHSSSSSMMSSSSH',
+    'HHHsSSSSSSSSSSHH',
+    'HHHHSSSSRSSSSRHH',
+    'HHHHHSSSMMSSSSHH',
   ];
   const eyesClosed = (head) => head.map((r, i) => (i === 7 ? r.replace(/K/g, 'S') : r));
   const koHead = (head) => {
@@ -862,34 +923,50 @@ const MX = (() => {
   // big sweaty face for the 當場被問倒 popup
   const faceSweat = makeSprite(sweatHead(P.PLAYER_HEAD).concat(P.SUIT_BODY.slice(0, 3)), PPAL);
 
-  // ── The councillors (and 沈伯洋, the tough one): wander, chase with arms up, dizzy, argue ──
-  const LONG = [[0, 12, 'H'], [1, 12, 'H'], [2, 12, 'H'], [0, 13, 'H'], [1, 13, 'H'], [2, 13, 'H'], [0, 14, 'H'], [1, 14, 'H'], [15, 12, 'H']];
-  const MIC = [[15, 10, 'm'], [15, 9, 'k'], [16, 9, 'k'], [15, 8, 'k'], [16, 8, 'k']];
-  const KINDS = {
-    jian: { head: P.JIAN_HEAD, body: P.BLAZER_SKIRT, pal: P.JIAN_PAL, extras: LONG },
-    he:   { head: P.HE_HEAD, body: P.JACKET_BODY, pal: P.HE_PAL, extras: [] },
-    xu:   { head: P.XU_HEAD, body: P.BLAZER_SKIRT, pal: P.XU_PAL, extras: LONG },
-    boss: { head: P.PUMA_HEAD, body: P.SUIT_BODY, pal: { ...P.PUMA_PAL, m: '#d0cde0', k: '#3b3747', T: '#d8343f' }, extras: MIC },
+  // ── Floating heads (everyone except 萬安): big upscaled hair caricatures ──
+  /** Nearest-neighbour upscale of a head grid so hair reads on phone. */
+  const upscaleHead = (rows, n = 2) => {
+    const out = [];
+    for (const row of rows) {
+      const r = row.padEnd(16).slice(0, 16);
+      let wide = '';
+      for (const ch of r) wide += ch.repeat(n);
+      for (let i = 0; i < n; i++) out.push(wide);
+    }
+    return out;
   };
+  const floatBoth = (head, pal, n = 2) => {
+    const rows = upscaleHead(head, n);
+    return { r: makeSprite(rows, pal), l: makeSprite(mirror(rows), pal) };
+  };
+  /** Slight vertical bob by padding a blank row (floating bounce). */
+  const bobHead = (head, up) => (up ? [' '.repeat(16), ...head.slice(0, 11)] : head);
+  const KINDS = {
+    jian: { head: P.JIAN_HEAD, pal: P.JIAN_PAL },
+    he:   { head: P.HE_HEAD, pal: P.HE_PAL },
+    xu:   { head: P.XU_HEAD, pal: P.XU_PAL },
+    boss: { head: P.PUMA_HEAD, pal: { ...P.PUMA_PAL, m: '#d0cde0', k: '#3b3747', T: '#d8343f', G: P.PUMA_PAL.G, L: P.PUMA_PAL.L } },
+  };
+  const HEAD_N = 2;   // maze chasers ≈ 32×24 — readable hair, still fits corridors
   const chars = {};
   for (const k in KINDS) {
-    const { head, body, pal, extras } = KINDS[k];
-    const ch = (opts, hd = head) => both(P.chibi({ head: hd, body, extras, ...opts }), pal);
-    const armUp = extras === MIC ? 'up' : 'wave';
+    const { head, pal } = KINDS[k];
+    const A = floatBoth(head, pal, HEAD_N);
+    const B = floatBoth(bobHead(head, true), pal, HEAD_N);
+    const dizzy = floatBoth(koHead(head), pal, HEAD_N);
+    const blink = floatBoth(eyesClosed(head), pal, HEAD_N);
     chars[k] = {
-      walk: [ch({ legF: 'forward', legB: 'back', armB: 'fwd', bob: 1 }), ch({}), ch({ legF: 'back', legB: 'forward', armB: 'back', bob: 1 }), ch({})],
-      chase: [ch({ legF: 'forward', legB: 'back', armF: armUp, armB: 'back', bob: 1 }), ch({ legF: 'back', legB: 'forward', armF: 'up', armB: 'fwd' })],
-      dizzy: ch({ armF: 'up', armB: 'up' }, koHead(head)),
-      argue: [ch({ armF: 'fwd', armB: 'down' }), ch({ armF: 'up', armB: 'down' })],
-      blink: ch({}, eyesClosed(head)),
+      walk: [B, A, B, A],
+      chase: [B, A],
+      dizzy,
+      argue: [A, B],
+      blink,
+      head: true,   // mark as floating-head sprite set
     };
   }
-  // 局長: a generic, neat city official with a folder — jumps in to answer for 萬安
-  const CHIEF_HEAD = P.PUMA_HEAD;
+  // 局長: floating head (grey hair), still answers for 萬安
   const CHIEF_PAL = { ...P.PUMA_PAL, H: '#8d8a9c', h: '#b4b1c2', U: '#2c3550', A: '#253048', a: '#1d2640', T: '#e8b04a', P: '#2a3046', Q: '#222838', O: '#4a86e8', o: '#2f63b8' };
-  const FOLDER = [[17, 13, 'O'], [18, 13, 'O'], [17, 14, 'o'], [18, 14, 'O'], [17, 15, 'O'], [18, 15, 'o']];
-  const chief = [both(P.chibi({ head: CHIEF_HEAD, body: P.SUIT_BODY, armF: 'fwd', extras: FOLDER, legF: 'forward', legB: 'back', bob: 1 }), CHIEF_PAL),
-    both(P.chibi({ head: CHIEF_HEAD, body: P.SUIT_BODY, armF: 'wave', extras: [] }), CHIEF_PAL)];
+  const chief = [floatBoth(P.PUMA_HEAD, CHIEF_PAL, HEAD_N), floatBoth(bobHead(P.PUMA_HEAD, true), CHIEF_PAL, HEAD_N)];
 
   // ── Items ──
   const SQUID_ROWS = ['   pp', '  pPPp', ' pPPPPp', ' PPPPPP', ' PKPPKP', ' PPPPPP', ' PpPPpP', 'P P  P P', 'P  PP  P'];
@@ -1016,15 +1093,16 @@ const MX = (() => {
     spr.label = { L, x: 5, y: 4, color: '#c2364a' };
     return spr;
   })();
-  // Boss 沈伯洋 (calm / fired / dizzy)
+  // Boss 沈伯洋: LARGE floating head (curly hair + glasses)
   const bossHead = (fired) => {
     const h = P.PUMA_HEAD.map((r) => [...r.padEnd(16)]);
     if (fired) { h[9][7] = 'R'; h[9][8] = 'R'; h[9][13] = 'R'; h[9][14] = 'R'; h[5][3] = 'L'; h[6][3] = 'L'; }
     return h.map((r) => r.join(''));
   };
   const BOSS_PAL = { ...P.PUMA_PAL, R: '#ff7a8a', L: '#bfe6ff' };
-  const bossFrames = (fired) => ['wave', 'up'].map((arm) => makeSprite(mirror(P.chibi({ head: bossHead(fired), body: P.SUIT_BODY, armF: arm })), BOSS_PAL));
-  const bossSpr = { calm: bossFrames(false), fired: bossFrames(true), dizzy: makeSprite(mirror(P.chibi({ head: koHead(P.PUMA_HEAD), body: P.SUIT_BODY, armF: 'up', armB: 'back' })), BOSS_PAL) };
+  const BOSS_N = 3;
+  const bossFrames = (fired) => [0, 1].map((i) => makeSprite(mirror(upscaleHead(bobHead(bossHead(fired), i === 1), BOSS_N)), BOSS_PAL));
+  const bossSpr = { calm: bossFrames(false), fired: bossFrames(true), dizzy: makeSprite(mirror(upscaleHead(koHead(P.PUMA_HEAD), BOSS_N)), BOSS_PAL), head: true };
 
   // Cannon: 萬安 in a little twin-barrel cart (boss phase)
   const CANNON_PAL = { ...P.PLAYER_PAL, C: '#d94a5c', c: '#a83a4e', Y: '#f2c14e', N: '#3a4466', n: '#7083c0', O: '#f2c14e', w: '#c9c6d6' };
@@ -1061,7 +1139,7 @@ const MX = (() => {
   };
 
   // Ending figures: Q版 盧秀燕 / 韓國瑜 / 鄭麗文 (never appear in the maze)
-  // 盧秀燕: short bob, friendly, glasses-free
+  // 盧秀燕: signature short bob (ear–jaw), rounded, glasses-free
   const LU_HEAD = [
     '   HHHHHHHHH',
     '  HHHHHHHHHHH',
@@ -1071,16 +1149,16 @@ const MX = (() => {
     'HHHHSSSSSSSSSSS',
     'HHHSSSSKSSSKSSS',
     'HHHsSSSKSSSKSSS',
-    'HHHsSSSSSSSSSSS',
-    ' HHSSSSRSSSSRSS',
-    '  HSSSSSSMMSSSS',
-    '   SSSSSSSSSSS',
+    ' HHHSSSSSSSSSSH',
+    '  HHSSSSRSSSRHH',
+    '   HSSSSSMMSSH',
+    '    HSSSSSSSH',
   ];
-  // 韓國瑜: bald head, big smile
+  // 韓國瑜: unmistakable BALD shiny dome + big smile (no hair crown)
   const HAN_HEAD = [
-    '    SSSSSSSS',
-    '  SSSSSSSSSSSS',
-    ' SSSSSSSSSSSSSS',
+    '    SSSWSSSS',
+    '  SSWSSSSSSWSS',
+    ' SSSWSSSSSSWSSS',
     'SSSSSSSSSSSSSSSS',
     'SSSSSSSSSSSSSSSS',
     'SSSSSSSSSSSSSSSS',
@@ -1088,36 +1166,39 @@ const MX = (() => {
     'SSSSSSKSSSKSSSSS',
     'SSSSSSSSSSSSSSSS',
     ' SSSSSRSSSSSRSSS',
-    '  SSSSSSMMMMSSS',
+    '  SSSSSMMMMMSSS',
     '   SSSSSSSSSSS',
   ];
-  // 鄭麗文: shoulder-length hair
+  // 鄭麗文: long wavy/curly locks + glasses + compact eyes
   const ZHENG_HEAD = [
-    '    HHHHHHHH',
-    '  HHHHHHHHHHHH',
-    ' HHHHHHhhhHHHHH',
+    '  H HHHHHHH H',
+    ' HHHHhHhHhHHHH',
+    'HHHHHHHHHHHHHHH',
     'HHHHHHHHHHHHHHHH',
     'HHHHHHHSSSSSSHHH',
-    'HHHHSSSSSSSSSSSS',
-    'HHHSSSSKSSSKSSSS',
-    'HHHsSSSKSSSKSSSS',
-    'HHHsSSSSSSSSSSSS',
-    'HHHSSSSRSSSSRSSS',
-    'HHHSSSSSSMMSSSSS',
-    ' HHHSSSSSSSSSS H',
+    'HHHHSSGGGGGGGGSS',
+    'HHHSSSGGGGGGGGSS',
+    'HHHsSSGKKGGKKGSS',
+    'HHHsSSGLLGSGLLSS',
+    'HHHSSSSRSSSSRSSH',
+    'HHHHSSSSSMMSSSHH',
+    'HHHH HSSSSSS HHH',
   ];
   const LU_PAL = { ...P.JIAN_PAL, H: '#4a3a2a', h: '#6a5240', U: '#c45a6a', A: '#a84858', a: '#8e3848', T: '#e8b04a', P: '#8e3848', Q: '#6e2838' };
-  const HAN_PAL = { ...P.PLAYER_PAL, H: '#c8b090', h: '#d8c4a8', U: '#2a5aaa', A: '#1e4888', a: '#163868', T: '#e8b04a', P: '#2a3a58', Q: '#1e2a48' };
-  const ZHENG_PAL = { ...P.XU_PAL, H: '#2a2433', h: '#3a3448', U: '#3a7ad0', A: '#2e68b8', a: '#245898', T: '#e8b04a', P: '#2e3a58', Q: '#222838' };
+  // Bald shine uses W; keep skin-tinted H unused on crown
+  const HAN_PAL = { ...P.PLAYER_PAL, H: '#c8b090', h: '#d8c4a8', W: '#fff6e8', U: '#2a5aaa', A: '#1e4888', a: '#163868', T: '#e8b04a', P: '#2a3a58', Q: '#1e2a48' };
+  const ZHENG_PAL = { ...P.XU_PAL, H: '#2a2433', h: '#3a3448', U: '#3a7ad0', A: '#2e68b8', a: '#245898', T: '#e8b04a', P: '#2e3a58', Q: '#222838', G: '#2a2433', L: '#d9eeff' };
+  const ENDER_N = 3;   // cold-water close-up: hair must be unmistakable
   const ender = {};
-  for (const [k, head, body, pal] of [
-    ['lu', LU_HEAD, P.BLAZER_SKIRT, LU_PAL],
-    ['han', HAN_HEAD, P.SUIT_BODY, HAN_PAL],
-    ['zheng', ZHENG_HEAD, P.JACKET_BODY, ZHENG_PAL],
+  for (const [k, head, pal] of [
+    ['lu', LU_HEAD, LU_PAL],
+    ['han', HAN_HEAD, HAN_PAL],
+    ['zheng', ZHENG_HEAD, ZHENG_PAL],
   ]) {
     ender[k] = {
-      stand: makeSprite(mirror(P.chibi({ head, body, armF: 'wave' })), pal),
-      splash: makeSprite(mirror(P.chibi({ head, body, armF: 'up', armB: 'up' })), pal),
+      stand: makeSprite(mirror(upscaleHead(head, ENDER_N)), pal),
+      splash: makeSprite(mirror(upscaleHead(bobHead(head, true), ENDER_N)), pal),
+      head: true,
     };
   }
   // Bucket for cold-water gag
@@ -2865,15 +2946,17 @@ class Game {
   }
   drawChaser(ctx, c, ox, oy) {
     const x = c.x - ox, y = c.y - oy + FEET;
-    if (x < -30 || y < -10 || x > VIEW_W + 30 || y > VIEW_H + 40) { c.spr = null; return; }
+    if (x < -40 || y < -20 || x > VIEW_W + 40 || y > VIEW_H + 50) { c.spr = null; return; }
     const s = this.chaserSprite(c);
-    const hop = c.mode === 'chase' ? Math.round(Math.abs(Math.sin(c.anim * 12))) : 0;
-    c.spr = s; c.sx = snap(x - s.w / 2); c.sy = snap(y - s.h - hop);
+    const hop = c.mode === 'chase' ? Math.round(Math.abs(Math.sin(c.anim * 12)) * 2) : Math.round(Math.abs(Math.sin(c.anim * 5)));
+    // Floating heads hover a few px above the ground point; shadow stays on the floor.
+    const float = 6;
+    c.spr = s; c.sx = snap(x - s.w / 2); c.sy = snap(y - s.h - hop - float);
     const vis = c.vis || 0;
     const near = Math.hypot(c.x - this.p.x, c.y - this.p.y) < LIGHT.SIL_DIST;
     // Fully/partly revealed: normal sprite. Outside the beam but nearby: faint dark silhouette only.
     if (vis > 0.02) {
-      this.shadow(ctx, x, y - 1);
+      this.shadow(ctx, x, y - 1, Math.min(18, 8 + (s.w >> 3)));
       ctx.globalAlpha = clamp(vis, 0, 1);
       ctx.drawImage(s.canvas, c.sx, c.sy);
       ctx.globalAlpha = 1;
@@ -3363,21 +3446,20 @@ class Game {
     ctx.drawImage(wv.canvas, snap(b.x - wv.w - 4), snap(b.y + 14 + bob), wv.w * 2, wv.h * 2);
     const frames = b.stage >= 2 ? MX.bossSpr.fired : MX.bossSpr.calm;
     const s = frames[Math.floor(this.time / 0.4) % 2];
-    const img = b.flash > 0 ? (() => {
-      // inline white flash without dedicated cache miss
-      return s.canvas;
-    })() : s.canvas;
+    const img = s.canvas;
     if (b.flash > 0) ctx.globalAlpha = 0.7;
-    ctx.drawImage(img, snap(b.x - s.w), snap(b.y - s.h * 2 + 16 + bob), s.w * 2, s.h * 2);
+    // Floating head already upscaled; draw ~1.15× for a big readable face
+    const sc = 1.15;
+    ctx.drawImage(img, snap(b.x - (s.w * sc) / 2), snap(b.y - s.h * sc + 8 + bob), s.w * sc, s.h * sc);
     ctx.globalAlpha = 1;
     if (b.state === 'revive') {
-      const k = clamp(b.t / 0.4, 0, 1), r = 18 + 10 * k;
+      const k = clamp(b.t / 0.4, 0, 1), r = 22 + 12 * k;
       ctx.globalAlpha = 0.5 * (1 - clamp((b.t - 1.2) / 0.7, 0, 1));
-      ctx.strokeStyle = PAL.star; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(b.x, b.y - 4, r, r * 1.15, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = PAL.star; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(b.x, b.y - 8, r, r * 1.15, 0, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
     }
-    if (b.bubble) this.drawBubble(ctx, b.bubble, b.x, b.y - 36, []);
-    drawZh(ctx, '魔王 ' + NAMES.boss, b.x, b.y - 40 - (b.bubble ? 16 : 0), { align: 'center', color: '#ffd45e', outline: PAL.ink, weight: 'bold', size: 10 });
+    if (b.bubble) this.drawBubble(ctx, b.bubble, b.x, b.y - 48, []);
+    drawZh(ctx, '魔王 ' + NAMES.boss, b.x, b.y - 52 - (b.bubble ? 16 : 0), { align: 'center', color: '#ffd45e', outline: PAL.ink, weight: 'bold', size: 11 });
   }
   drawCannon(ctx) {
     const p = this.bp; if (!p) return;
@@ -3437,16 +3519,16 @@ class Game {
     const c = this.cold; if (!c) return;
     const who = c.who;
     const spr = (c.phase === 'splash' || c.phase === 'line') ? MX.ender[who].splash : MX.ender[who].stand;
-    const enterX = lerp(-40, VIEW_W / 2 + 50, easeOutCubic(clamp(c.t / 0.5, 0, 1)));
+    const enterX = lerp(-50, VIEW_W / 2 + 50, easeOutCubic(clamp(c.t / 0.5, 0, 1)));
     const x = c.phase === 'enter' ? enterX : VIEW_W / 2 + 50;
-    const y = 130;
-    // bucket overhead
+    const y = 136;   // chin / float baseline
+    // bucket overhead (above the big floating head)
     if (c.phase !== 'enter' || c.t > 0.35) {
-      const bx = x - 8, by = y - spr.h - 14 + (c.phase === 'splash' && c.splash < 0.25 ? Math.sin(c.splash * 40) * 3 : 0);
+      const bx = x - 8, by = y - spr.h - 18 + (c.phase === 'splash' && c.splash < 0.25 ? Math.sin(c.splash * 40) * 3 : 0);
       ctx.drawImage(MX.bucket.canvas, snap(bx - MX.bucket.w / 2), snap(by));
     }
     ctx.drawImage(spr.canvas, snap(x - spr.w / 2), snap(y - spr.h));
-    drawZh(ctx, ENDER_NAMES[who], x, y - spr.h - 6, { align: 'center', color: '#ffd45e', outline: PAL.ink, weight: 'bold', size: 11 });
+    drawZh(ctx, ENDER_NAMES[who], x, y - spr.h - 8, { align: 'center', color: '#ffd45e', outline: PAL.ink, weight: 'bold', size: 12 });
     // wet 萬安 already drawn via cannon.wet in drawBossWorld path — redraw wet on top
     if (c.phase !== 'enter') {
       const p = this.bp;
